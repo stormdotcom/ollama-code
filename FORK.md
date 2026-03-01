@@ -5,8 +5,8 @@ This repository is a **local-first custom fork** of the Claude Code plugins/tool
 ## Goals
 
 - **Local-only:** No API keys; no code or conversations leave your machine.
-- **Ollama:** Uses `http://localhost:11434/v1` (OpenAI-compatible). Works with any model you pull (e.g. `qwen2.5-coder:7b`, `deepseek-coder`, `llama3.1`).
-- **Default model:** `qwen2.5-coder:7b` unless you pass `--model <name>`.
+- **Ollama:** Uses `http://localhost:11434/v1` (OpenAI-compatible). Works with any model you pull (e.g. `deepseek-r1:7b`, `deepseek-coder`, `llama3.1`).
+- **Default model:** `deepseek-r1:7b` unless you pass `--model <name>`.
 - **Agentic behavior:** File and command tools are wrapped in XML tags (`<read_file>`, `<write_file>`, `<edit_file>`, `<execute_command>`, `<search_code>`) so local models can invoke them reliably.
 - **Pre-flight:** The CLI checks that Ollama is running (GET `http://localhost:11434/api/tags`) before starting a session.
 
@@ -20,7 +20,7 @@ This repository is a **local-first custom fork** of the Claude Code plugins/tool
 
 ## Running
 
-1. Install and run [Ollama](https://ollama.com); pull a model, e.g. `ollama pull qwen2.5-coder:7b`.
+1. Install and run [Ollama](https://ollama.com); pull a model, e.g. `ollama pull deepseek-r1:7b`.
 2. From this repo: `npm install && npm run build` then `npx ollama-code` (or `ollama-code` if linked).
 3. Optional: `ollama-code --model <model-name>`.
 

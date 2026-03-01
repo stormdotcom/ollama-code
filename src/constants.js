@@ -14,7 +14,7 @@ export const OLLAMA_API_BASE = `${OLLAMA_BASE_URL}/v1`;
 
 /** Config directory for this CLI only; we never read or write .claude/ */
 export const CONFIG_DIR = '.ollama-code';
-export const DEFAULT_MODEL = 'qwen2.5-coder:7b';
+export const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'deepseek-r1:7b';
 export const NUM_CTX = 32768;
 
 export const SYSTEM_PROMPT = `You are a local autonomous developer. You are running on the user's local machine via Ollama. You have permission to read files, write code, and execute terminal commands. Your goal is to solve the user's task with minimal latency and high precision. Do not apologize for being a local model; focus on the code.

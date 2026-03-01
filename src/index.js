@@ -52,7 +52,11 @@ export async function runCli(argv) {
 
   let currentModel = args.model;
   if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
-    console.warn(style.warn(`Warning: model "${currentModel}" not found. Available: ${preflight.models.join(', ')}`));
+    const fallback = preflight.models[0];
+    console.warn(style.warn(`Model "${currentModel}" not found. Falling back to "${fallback}".`));
+    console.log(style.info(`  Available: ${preflight.models.join(', ')}`));
+    console.log(style.info(`  Use --model <name> or /model <name> to switch.\n`));
+    currentModel = fallback;
   }
 
   // ── Splash ────────────────────────────────────────────────────────────

@@ -2,7 +2,7 @@
 
 ## Fork: OLLAMA-CODE-CLI (Local-First)
 
-This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `qwen2.5-coder:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
+This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `deepseek-r1:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
 
 ---
 

@@ -27,6 +27,7 @@ OLLAMA-CODE-CLI uses these optional environment variables to talk to Ollama:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `OLLAMA_MODEL` | Default model (instead of `deepseek-r1:7b`). | `deepseek-r1:7b` |
 | `OLLAMA_BASE_URL` | Full base URL for Ollama (host + port + protocol). Overrides host/port/tls below. | `http://localhost:11434` |
 | `OLLAMA_HOST` | Ollama server host (ignored if `OLLAMA_BASE_URL` is set). | `localhost` |
 | `OLLAMA_PORT` | Ollama server port (ignored if `OLLAMA_BASE_URL` is set). | `11434` |
@@ -62,7 +63,7 @@ node bin\ollama-code.js
 Pull a coding model before first use, for example:
 
 ```bash
-ollama pull qwen2.5-coder:7b
+ollama pull deepseek-r1:7b
 ```
 
 ## Get started
@@ -98,7 +99,7 @@ npm install -g .
 ollama-code
 ```
 
-**Optional: choose a model** — Default is `qwen2.5-coder:7b`. Override with `--model` (e.g. `ollama-code --model deepseek-coder`).  
+**Optional: choose a model** — Default is `deepseek-r1:7b`. Override with `--model` (e.g. `ollama-code --model deepseek-coder`).  
 **Version** — Run `ollama-code --version` (or `node bin/ollama-code.js --version`) to see the version and "Local-First Custom Fork" label.
 
 ---
@@ -109,7 +110,7 @@ ollama-code
    Download from [nodejs.org](https://nodejs.org) or use Winget: `winget install OpenJS.NodeJS.LTS`
 
 2. **Install and run Ollama**  
-   Download from [ollama.com](https://ollama.com) or: `winget install Ollama.Ollama`. Start Ollama (it may run in the background). Pull a model: `ollama pull qwen2.5-coder:7b`
+   Download from [ollama.com](https://ollama.com) or: `winget install Ollama.Ollama`. Start Ollama (it may run in the background). Pull a model: `ollama pull deepseek-r1:7b`
 
 3. **Get the CLI**  
    Clone or download this repo, then open PowerShell or Command Prompt in the repo folder.
@@ -159,7 +160,7 @@ ollama-code
    [nodejs.org](https://nodejs.org) or Homebrew: `brew install node`
 
 2. **Install and run Ollama**  
-   [ollama.com](https://ollama.com) or Homebrew: `brew install ollama`. Start the Ollama app or run `ollama serve`. Then: `ollama pull qwen2.5-coder:7b`
+   [ollama.com](https://ollama.com) or Homebrew: `brew install ollama`. Start the Ollama app or run `ollama serve`. Then: `ollama pull deepseek-r1:7b`
 
 3. **Get the CLI**  
    Clone or download this repo, then open Terminal in the repo folder.
@@ -210,7 +211,7 @@ ollama-code
    ```bash
    curl -fsSL https://ollama.com/install.sh | sh
    ollama serve   # or start the ollama service
-   ollama pull qwen2.5-coder:7b
+   ollama pull deepseek-r1:7b
    ```
 
 3. **Get the CLI**  
@@ -285,22 +286,26 @@ Files written or edited are automatically scanned for hardcoded secrets (AWS key
 
 ---
 
-## PowerShell personas (aliases)
+## Personas (quick-launch aliases)
 
-Add these to your `$PROFILE` to launch with different models for different tasks:
+Set up one-word commands to launch the CLI with different models.
+
+### Windows (PowerShell)
+
+Open your profile with `notepad $PROFILE` and add:
 
 ```powershell
 # Hacking persona: payload / exploit generation (uncensored)
-function h-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model dolphin-mistral $args }
+function h-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model dolphin-mistral @args }
 
 # Reasoning persona: logic / binary analysis
-function r-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model deepseek-r1:7b $args }
+function r-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model deepseek-r1:7b @args }
 
-# Dev persona: high-accuracy coding
-function d-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model llama2-uncensored $args }
+# Dev persona: general coding (uncensored)
+function d-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model llama2-uncensored @args }
 ```
 
-Then use:
+Save, then restart PowerShell (or run `. $PROFILE`). Now use:
 
 ```powershell
 h-code    # starts with dolphin-mistral
@@ -308,16 +313,35 @@ r-code    # starts with deepseek-r1:7b
 d-code    # starts with llama2-uncensored
 ```
 
-You can also switch models mid-session with `/model dolphin-mistral`.
+> **Important:** Use `@args` (not `$args`) inside functions so extra flags pass through correctly.
 
-### Bash aliases (macOS / Linux)
+> **Note:** PowerShell does **not** support `alias` for commands with arguments. You must use `function` as shown above.
+
+### macOS / Linux (bash / zsh)
 
 Add to `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-alias h-code='node /path/to/ollama-code/bin/ollama-code.js --model dolphin-mistral'
-alias r-code='node /path/to/ollama-code/bin/ollama-code.js --model deepseek-r1:7b'
-alias d-code='node /path/to/ollama-code/bin/ollama-code.js --model llama2-uncensored'
+# Hacking persona
+h-code() { node "/path/to/ollama-code/bin/ollama-code.js" --model dolphin-mistral "$@"; }
+
+# Reasoning persona
+r-code() { node "/path/to/ollama-code/bin/ollama-code.js" --model deepseek-r1:7b "$@"; }
+
+# Dev persona
+d-code() { node "/path/to/ollama-code/bin/ollama-code.js" --model llama2-uncensored "$@"; }
+```
+
+Then `source ~/.bashrc` (or restart the terminal).
+
+### Switch mid-session
+
+You can also switch models inside the CLI at any time:
+
+```
+/model dolphin-mistral
+/model deepseek-r1:7b
+/models              # list all pulled models
 ```
 
 ---
