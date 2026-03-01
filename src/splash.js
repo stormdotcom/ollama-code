@@ -65,6 +65,7 @@ export function printSplash(model, version) {
   console.log(`  ${c.cyan}Web UI ${c.reset} ${c.gray}on by default at http://${lanIp}:${port}${c.reset} ${c.dim}(--no-serve to disable, /serve to toggle)${c.reset}`);
   console.log('');
   console.log(`  ${c.green}Type a task${c.reset} or ${c.yellow}/help${c.reset} for commands.  ${c.dim}Ctrl+D to quit.${c.reset}`);
+  console.log(`  ${c.dim}Multi-line: add lines then press Enter on empty line to send as one instruction.${c.reset}`);
   console.log(bar);
   console.log('');
 }

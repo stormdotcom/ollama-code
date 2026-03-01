@@ -27,6 +27,20 @@ import { autoPrune, estimateMessagesTokens } from './contextManager.js';
 import { c } from './splash.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Print a QR code for the given URL to the terminal (scan to open session). Optional dep qrcode-terminal. */
+export async function printSessionQr(url) {
+  if (!url || typeof url !== 'string') return;
+  try {
+    const qt = await import('qrcode-terminal');
+    const gen = qt.default?.generate ?? qt.generate;
+    if (typeof gen === 'function') {
+      gen(url, { small: true });
+    }
+  } catch {
+    // qrcode-terminal not installed — skip QR, URL still shown
+  }
+}
 const MAX_TOOL_ITERATIONS = 10;
 
 function emit(res, type, data) {

@@ -298,13 +298,15 @@ export async function runCli(argv) {
   let compactDisplay = args.compact;
   let jobRunning = false;
   const inputQueue = [];
+  let inputBuffer = []; // multi-line text box: accumulated lines until empty line or timer
 
-  // ── Dedicated input prompt ─────────────────────────────────────────────
-  // Always accepts input, even while a job is running.
-  // When idle: shows "You: " prompt. When busy: shows "(queued) > " prompt.
+  // ── Dedicated input prompt (multi-line text box style) ───────────────────
+  // When buffer has lines: show "  » " so user knows more lines = one instruction.
   function showPrompt() {
     if (jobRunning) {
       rl.setPrompt(`  ${c.gray}(queued)${c.reset} ${c.dim}>${c.reset} `);
+    } else if (inputBuffer.length > 0) {
+      rl.setPrompt(`  ${c.dim}»${c.reset} `);
     } else {
       rl.setPrompt(style.prompt());
     }
@@ -1125,17 +1127,19 @@ export async function runCli(argv) {
     });
   }
 
-  // ── Event-driven input: always accepts keystrokes ─────────────────
-  // Coalesce pasted lines into one input (readline emits 'line' per line on paste).
+  // ── Multi-line text box: one whole instruction per submit ────────────────
+  // Empty line = send. Paste = coalesced into one input. Single line = send after delay.
   const PASTE_DELAY_MS = 80;
-  let pasteBuffer = [];
-  let pasteTimer = null;
+  let inputTimer = null;
 
-  function flushPasteBuffer() {
-    pasteTimer = null;
-    if (pasteBuffer.length === 0) return;
-    const combined = pasteBuffer.map((l) => (l ?? '').trimEnd()).join('\n').trim();
-    pasteBuffer = [];
+  function flushInputBuffer() {
+    if (inputTimer) {
+      clearTimeout(inputTimer);
+      inputTimer = null;
+    }
+    if (inputBuffer.length === 0) return;
+    const combined = inputBuffer.map((l) => (l ?? '').trimEnd()).join('\n').trim();
+    inputBuffer = [];
     if (!combined) {
       showPrompt();
       return;
@@ -1150,13 +1154,19 @@ export async function runCli(argv) {
 
   rl.on('line', (line) => {
     const trimmed = (line || '').trim();
-    if (pasteBuffer.length === 0 && !trimmed) {
+    // Empty line = send current buffer (text-box style: one whole instruction)
+    if (trimmed === '') {
+      if (inputBuffer.length > 0) {
+        flushInputBuffer();
+        return;
+      }
       showPrompt();
       return;
     }
-    pasteBuffer.push(line ?? '');
-    if (pasteTimer) clearTimeout(pasteTimer);
-    pasteTimer = setTimeout(flushPasteBuffer, PASTE_DELAY_MS);
+    inputBuffer.push((line ?? '').trimEnd());
+    if (inputTimer) clearTimeout(inputTimer);
+    inputTimer = setTimeout(flushInputBuffer, PASTE_DELAY_MS);
+    showPrompt(); // show "  » " for next line (multi-line = one instruction)
   });
 
   // Show the initial prompt
