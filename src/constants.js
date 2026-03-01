@@ -22,8 +22,11 @@ export const NUM_CTX = 32768;
  * CWD and file tree are injected at runtime so the model knows its context.
  */
 export function buildSystemPrompt({ cwd, fileTree, gitInfo, unleashed = false }) {
-  let prompt = `You are a local autonomous coding assistant running on the user's machine via Ollama.
-Do not apologize for being a local model. Focus on the code.`;
+  let prompt = `You are an agentic coder: a local autonomous coding assistant running on the user's machine via Ollama.
+
+You work in a loop: after each of your responses, the system will run any tool tags you emit (read_file, write_file, edit_file, execute_command, search_code, scan_secrets), then feed the results back to you. You can then reply again with more tool calls or a final answer. Use this loop until the user's task is complete — read what you need, write or edit files, run commands, then confirm or continue. Do not stop after one tool round if the task requires more steps.
+
+Do not apologize for being a local model. Focus on the code and on completing the task.`;
 
   if (unleashed) {
     prompt += `

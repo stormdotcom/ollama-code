@@ -2,7 +2,7 @@
 
 ![](https://img.shields.io/badge/Node.js-18%2B-brightgreen?style=flat-square)
 
-OLLAMA-CODE-CLI is a **local-first** coding assistant that runs in your terminal. It uses [Ollama](https://ollama.com) on your machine—no cloud API keys or data leave your computer. It understands your codebase, helps with routine tasks, explains code, and works with git—all through natural language.
+OLLAMA-CODE-CLI is a **local-first, agentic** coding assistant that runs in your terminal. It uses [Ollama](https://ollama.com) on your machine—no cloud API keys or data leave your computer. You give it a task in natural language; it uses tools (read, write, edit, run commands, search) in a loop until the job is done. It understands your codebase, writes directly into it, and works with git—all driven by your instructions.
 
 <img src="./demo.gif" alt="Demo" />
 
@@ -31,6 +31,8 @@ You can run OLLAMA-CODE-CLI alongside an already installed **Claude Code** witho
 | **Install location** | Separate (e.g. system path, Cask, WinGet) | This repo or `npm install -g` (different package name) |
 
 We never read or write `.claude/`, and we do not use any Anthropic or Claude-specific environment variables.
+
+For a **feature-by-feature comparison** with Claude Code CLI (slash commands, shortcuts, tools, permissions), see [docs/CLAUDE-CODE-FEATURES.md](docs/CLAUDE-CODE-FEATURES.md).
 
 ---
 
@@ -268,6 +270,19 @@ ollama-code
    ```
 
    Then `chmod +x ~/bin/ollama-code` and ensure `~/bin` is in your PATH.
+
+---
+
+## Agentic behavior
+
+The CLI runs as an **agentic coder**: you describe a task, and the model can use tools repeatedly until it’s done.
+
+1. You send a message (e.g. “add a health check endpoint to the API”).
+2. The model may reply with tool tags: `<read_file>`, `<write_file>`, `<edit_file>`, `<execute_command>`, `<search_code>`.
+3. The CLI runs those tools and feeds the results back to the model.
+4. The model can reply again with more tool calls or a final answer. This loop continues for up to 10 rounds (or until the model stops emitting tools).
+
+So the result you get is **agentic**: the model reads files, edits code, and runs commands in your repo by itself, only pausing to ask when a shell command needs your approval.
 
 ---
 
