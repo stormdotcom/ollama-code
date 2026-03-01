@@ -41,7 +41,6 @@ export function createStreamFormatter(write) {
         const line = lineBuffer.slice(0, idx);
         lineBuffer = lineBuffer.slice(idx + 1);
         flushLine(line);
-        lineCount++;
       }
     },
 

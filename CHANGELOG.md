@@ -4,6 +4,16 @@
 
 This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `deepseek-r1:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
 
+### 1.6.0
+
+- **LAN Web UI**: Added `--serve` / `-s` to run a web server for session control from any device on your network
+  - Mobile-responsive chat window at http://localhost:3141 (or http://&lt;your-ip&gt;:3141)
+  - Session control by session ID (create new or resume existing)
+  - Real-time stream progress (thinking, reading, writing, running)
+  - HTTP chunked streaming (NDJSON) — no WebSocket dependency
+  - Environment: `OLLAMA_CODE_SERVE_HOST`, `OLLAMA_CODE_SERVE_PORT`
+- **Serve mode**: Commands and file access auto-approved when running `--serve` (user controls the server)
+
 ### 1.5.0
 
 - **Compact Mode**: Added `/compact` toggle and `--compact` flag to hide verbose model output and show only step-by-step progress descriptions (Step 1 Thinking, Step 2 Reading file, etc.)

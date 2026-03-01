@@ -8,7 +8,7 @@ export async function checkOllamaRunning() {
   try {
     const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
       method: 'GET',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) {
       return { ok: false, error: `Ollama returned ${res.status}. Ensure Ollama is running.` };
@@ -43,7 +43,7 @@ export async function listModels() {
   try {
     const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
       method: 'GET',
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return [];
     const data = await res.json();

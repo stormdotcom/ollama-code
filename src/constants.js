@@ -27,6 +27,10 @@ export const CHROMADB_URL = process.env.CHROMADB_URL || 'http://localhost:8000';
 /** Ollama embedding model for RAG */
 export const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 
+/** Web server for LAN session control */
+export const SERVE_HOST = process.env.OLLAMA_CODE_SERVE_HOST || '0.0.0.0';
+export const SERVE_PORT = parseInt(process.env.OLLAMA_CODE_SERVE_PORT || '3141', 10);
+
 /**
  * System prompt — tells the model exactly what permissions it already has.
  * CWD and file tree are injected at runtime so the model knows its context.

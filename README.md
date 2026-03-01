@@ -47,6 +47,8 @@ OLLAMA-CODE-CLI uses these optional environment variables to talk to Ollama:
 | `OLLAMA_HOST` | Ollama server host (ignored if `OLLAMA_BASE_URL` is set). | `localhost` |
 | `OLLAMA_PORT` | Ollama server port (ignored if `OLLAMA_BASE_URL` is set). | `11434` |
 | `OLLAMA_TLS` | Set to `1` to use `https` instead of `http` (only when using `OLLAMA_HOST`/`OLLAMA_PORT`). | — |
+| `OLLAMA_CODE_SERVE_HOST` | Bind address for `--serve` (use `0.0.0.0` for LAN). | `0.0.0.0` |
+| `OLLAMA_CODE_SERVE_PORT` | Port for `--serve` web UI. | `3141` |
 
 **Examples**
 
@@ -116,6 +118,29 @@ ollama-code
 
 **Optional: choose a model** — Default is `deepseek-r1:7b`. Override with `--model` (e.g. `ollama-code --model deepseek-coder`).  
 **Version** — Run `ollama-code --version` (or `node bin/ollama-code.js --version`) to see the version and "Local-First Custom Fork" label.
+
+---
+
+## LAN Web UI (Session Control)
+
+Control sessions from any device on your local network with a mobile-responsive chat window:
+
+```bash
+ollama-code --serve
+# or
+ollama-code -s --port 3141
+```
+
+- **Local:** http://localhost:3141  
+- **Network:** http://&lt;your-ip&gt;:3141 (e.g. from phone or tablet on same Wi‑Fi)
+
+**Features:**
+- Session control by session ID (create new or resume existing)
+- Stream progress (thinking, reading, writing, running) in real time
+- Mobile-responsive chat interface
+- Uses HTTP chunked streaming (no WebSocket dependency)
+
+**Environment:** `OLLAMA_CODE_SERVE_HOST` (default `0.0.0.0`), `OLLAMA_CODE_SERVE_PORT` (default `3141`).
 
 ---
 

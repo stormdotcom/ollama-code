@@ -7,6 +7,10 @@ import { checkSettingsPermission, addAllowRule } from './settings.js';
 const approvedPaths = new Set();
 let autoApproveCommands = false;
 let unleashedMode = false;
+let serveMode = false;
+
+export function setServeMode(val) { serveMode = val; }
+export function isServeMode() { return serveMode; }
 
 // Models whose name triggers unleashed mode automatically
 const UNCENSORED_MODEL_PATTERNS = [
@@ -56,6 +60,9 @@ export async function checkFilePermission(filePath, cwd, action = 'read') {
   if (filePath.includes('..')) {
     return { allowed: false, reason: 'Path traversal (..) is blocked for security.' };
   }
+
+  // Serve mode (web/LAN): auto-allow
+  if (serveMode) return { allowed: true };
 
   // Outside workspace: prompt user
   const { approved } = await confirmPath(filePath, action, cwd);
@@ -130,6 +137,8 @@ export function isCommandBlocked(command) {
  * Returns { approved: boolean, always?: boolean, source?: string }
  */
 export async function checkCommandPermission(command, cwd) {
+  if (serveMode) return { approved: true, source: 'serve-mode' };
+
   const blocked = isCommandBlocked(command);
   if (blocked) {
     if (unleashedMode) {

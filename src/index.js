@@ -32,13 +32,15 @@ function getVersion() {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null };
+  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null, noSessions: false, noRag: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' || argv[i] === '-v') args.version = true;
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
     if (argv[i] === '--unleashed' || argv[i] === '--uncensored') args.unleashed = true;
     if (argv[i] === '--compact') args.compact = true;
     if (argv[i] === '--resume' && argv[i + 1]) args.resume = argv[++i];
+    if (argv[i] === '--no-sessions') args.noSessions = true;
+    if (argv[i] === '--no-rag') args.noRag = true;
   }
   return args;
 }
@@ -87,51 +89,38 @@ export async function runCli(argv) {
     console.log('');
   }
 
-  // ── Load settings ───────────────────────────────────────────────────
   const workDir = cwd();
-  spinnerStart('Loading settings...', c.cyan);
+
+  // ── Parallel init: settings + scan (sync) + git + mongo + chroma (async) ──
+  spinnerStart('Initializing...', c.cyan);
   const settings = loadSettings(workDir);
+  const fileTree = scanProjectTree(workDir);
+  const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
+
+  const initTasks = [getGitContext()];
+  if (!args.noSessions) initTasks.push(tryMongoConnect());
+  if (!args.noRag) initTasks.push(tryConnectChroma());
+  const results = await Promise.all(initTasks);
+  const gitContext = results[0];
+  const mongoOk = args.noSessions ? false : !!results[1];
+  const chromaOk = args.noRag ? false : !!(args.noSessions ? results[1] : results[2]);
+
   const allowRules = settings.permissions?.allow || [];
   const denyRules = settings.permissions?.deny || [];
   const ruleCount = allowRules.length + denyRules.length;
-  spinnerStop(ruleCount > 0
-    ? `${c.green}✓${c.reset} Loaded ${c.bold}${ruleCount}${c.reset} permission rule(s) from .ollama-code/settings.json`
-    : `${c.gray}─${c.reset} No settings file (defaults apply)`);
-
-  // ── Project scan ──────────────────────────────────────────────────────
-  spinnerStart('Scanning project files...', c.cyan);
-  const fileTree = scanProjectTree(workDir);
-  const fileCount = fileTree.split('\n').filter(l => l.trim()).length;
-  spinnerStop(`${c.green}✓${c.reset} Scanned ${c.bold}${fileCount}${c.reset} file(s) — model has full project context`);
-
-  // ── Git context ───────────────────────────────────────────────────────
-  spinnerStart('Loading git context...', c.cyan);
-  const gitContext = await getGitContext();
   const gitInfo = formatGitContextForPrompt(gitContext);
-  spinnerStop(gitInfo
-    ? `${c.green}✓${c.reset} Git context loaded`
-    : `${c.gray}─${c.reset} No git repository detected`);
 
-  // ── MongoDB session store ─────────────────────────────────────────────
-  spinnerStart('Connecting to MongoDB...', c.cyan);
-  const mongoOk = await tryMongoConnect();
-  spinnerStop(mongoOk
-    ? `${c.green}✓${c.reset} MongoDB connected — sessions enabled`
-    : `${c.gray}─${c.reset} MongoDB unavailable — sessions disabled ${c.gray}(npm i mongodb)${c.reset}`);
-
-  // ── ChromaDB RAG ─────────────────────────────────────────────────────
-  spinnerStart('Connecting to ChromaDB...', c.cyan);
-  const chromaOk = await tryConnectChroma();
-  spinnerStop(chromaOk
-    ? `${c.green}✓${c.reset} ChromaDB connected — RAG enabled`
-    : `${c.gray}─${c.reset} ChromaDB unavailable — RAG disabled ${c.gray}(chroma run)${c.reset}`);
+  spinnerStop(
+    `${c.green}✓${c.reset} Ready: ${c.bold}${fileCount}${c.reset} files` +
+    (ruleCount > 0 ? `, ${ruleCount} rule(s)` : '') +
+    (gitInfo ? ', git' : '') +
+    (mongoOk ? ', sessions' : '') +
+    (chromaOk ? ', RAG' : '')
+  );
 
   let ragEnabled = chromaOk;
 
-  // ── Build system prompt ───────────────────────────────────────────────
-  spinnerStart('Preparing system prompt...', c.magenta);
   const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
-  spinnerStop(`${c.green}✓${c.reset} System prompt ready`);
 
   let sessionId = generateSessionId();
   let messages = [];
@@ -183,6 +172,7 @@ export async function runCli(argv) {
 
   rl.on('close', async () => {
     console.log(style.info('\nGoodbye.'));
+    await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
     await mongoDisconnect();
     process.exit(0);
   });
@@ -339,11 +329,11 @@ export async function runCli(argv) {
       console.log(`  ${c.green}Done${c.reset}    ${c.gray}${stepNum} step(s) completed${c.reset} ${c.gray}${elapsed}s${c.reset}\n`);
     }
 
-    await autoSave(sessionId, messages, currentModel, {
+    void autoSave(sessionId, messages, currentModel, {
       cwd: workDir,
       unleashed: isUnleashedMode(),
       fileCount,
-    });
+    }).catch(() => {});
   }
 
   function processQueue() {

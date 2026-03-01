@@ -1,8 +1,20 @@
 #!/usr/bin/env node
 
-import { runCli } from '../src/index.js';
+const argv = process.argv.slice(2);
+const isServe = argv.includes('--serve') || argv.includes('-s');
 
-runCli(process.argv.slice(2)).catch((err) => {
-  console.error(err.message || err);
-  process.exit(1);
-});
+if (isServe) {
+  import('../src/webServer.js').then(({ runServe }) =>
+    runServe(argv).catch((err) => {
+      console.error(err.message || err);
+      process.exit(1);
+    })
+  );
+} else {
+  import('../src/index.js').then(({ runCli }) =>
+    runCli(argv).catch((err) => {
+      console.error(err.message || err);
+      process.exit(1);
+    })
+  );
+}

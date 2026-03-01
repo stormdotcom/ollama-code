@@ -98,7 +98,7 @@ export function printHelp() {
   console.log('');
   console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3…${c.reset}`);
   console.log(`  ${c.gray}Tip: You can queue instructions while a task is running.${c.reset}`);
-  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>${c.reset}`);
+  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>, --serve, --no-sessions, --no-rag${c.reset}`);
   console.log('');
 }
 

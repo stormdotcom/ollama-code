@@ -1,7 +1,7 @@
 import { c } from './splash.js';
 
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const INTERVAL = 80;
+const INTERVAL = 60;
 
 let active = null;
 

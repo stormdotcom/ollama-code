@@ -1,6 +1,6 @@
 {
   "name": "ollama-code-cli",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Local-first coding assistant using Ollama — no cloud API",
   "type": "module",
   "main": "src/index.js",

@@ -34,11 +34,11 @@ export function scanProjectTree(cwd) {
 
     for (const f of files) {
       if (count >= MAX_FILES) { lines.push(`${prefix}... (truncated)`); return; }
-      const rel = relative(cwd, join(dir, f.name));
+      const fullPath = join(dir, f.name);
+      const rel = relative(cwd, fullPath);
       try {
-        const stat = statSync(join(dir, f.name));
-        const kb = (stat.size / 1024).toFixed(1);
-        lines.push(`${prefix}${rel} (${kb} KB)`);
+        const stat = statSync(fullPath);
+        lines.push(`${prefix}${rel} (${(stat.size / 1024).toFixed(1)} KB)`);
       } catch {
         lines.push(`${prefix}${rel}`);
       }
