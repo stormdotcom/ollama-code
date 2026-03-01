@@ -678,7 +678,6 @@ export async function runCli(argv) {
         switch (cmd.toLowerCase()) {
           case '/exit': case '/quit': case '/q':
             rl.close();
-            console.log(style.info('Goodbye.'));
             return;
 
           case '/help':
@@ -1089,7 +1088,6 @@ export async function runCli(argv) {
 
     if (/^(exit|quit|q)$/i.test(trimmed)) {
       rl.close();
-      console.log(style.info('Goodbye.'));
       return;
     }
 

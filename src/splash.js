@@ -60,14 +60,11 @@ export function printSplash(model, version) {
   console.log(c.gray + '     Local-First Agentic Coding with Ollama' + c.reset);
   console.log(bar);
   console.log('');
-  console.log(`  ${c.cyan}Model   ${c.reset}${c.bold}${model}${c.reset}`);
-  console.log(`  ${c.cyan}Version ${c.reset}${c.brightCyan}${c.bold}${version}${c.reset} ${c.gray}(Local-First Custom Fork)${c.reset}`);
-  console.log(`  ${c.cyan}Server  ${c.reset}${c.gray}${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}${c.reset}`);
-  console.log(`  ${c.cyan}LAN UI  ${c.reset}${c.gray}ollama-code --serve  →  ${c.reset}${c.underline}http://${lanIp}:${port}${c.reset}`);
+  console.log(`  ${c.cyan}Model  ${c.reset} ${c.bold}${model}${c.reset}`);
+  console.log(`  ${c.cyan}Server ${c.reset} ${c.gray}${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}${c.reset}`);
+  console.log(`  ${c.cyan}LAN    ${c.reset} ${c.underline}http://${lanIp}:${port}${c.reset} ${c.gray}(--serve to enable web UI)${c.reset}`);
   console.log('');
-  console.log(`  ${c.green}Type a task${c.reset} or use ${c.yellow}/help${c.reset} for commands.`);
-  console.log(`  ${c.gray}Tools: read_file, write_file, edit_file, execute_command, search_code, list_files${c.reset}`);
-  console.log(`  ${c.dim}(Press Ctrl+D or type /exit to quit)${c.reset}`);
+  console.log(`  ${c.green}Type a task${c.reset} or ${c.yellow}/help${c.reset} for commands.  ${c.dim}Ctrl+D to quit.${c.reset}`);
   console.log(bar);
   console.log('');
 }
