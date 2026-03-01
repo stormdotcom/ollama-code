@@ -34,6 +34,9 @@ export const SERVE_PORT = parseInt(process.env.OLLAMA_CODE_SERVE_PORT || '3141',
 /** Command execution timeout (ms). Node spawn ignores timeout; we enforce manually. Default 20 min for long pip installs. */
 export const COMMAND_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_CMD_TIMEOUT || '1200000', 10);
 
+/** First-response timeout (ms). If no first token within this time, user can switch model or retry. Default 90s. */
+export const FIRST_RESPONSE_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_FIRST_RESPONSE_TIMEOUT || '90000', 10);
+
 /**
  * System prompt — tells the model exactly what permissions it already has.
  * CWD and file tree are injected at runtime so the model knows its context.

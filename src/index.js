@@ -4,7 +4,7 @@ import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js
 import { printSplash, printVersion, printHelp, printTools, printShortcuts, style, c, cliTheme, getLanAddress } from './splash.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
-import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
+import { buildSystemPrompt, DEFAULT_MODEL, FIRST_RESPONSE_TIMEOUT_MS } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall, PARALLEL_SAFE_TOOLS } from './tools/executors.js';
 import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, isUnleashedMode } from './security.js';
@@ -14,7 +14,7 @@ import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool, 
 import { createStreamFormatter } from './outputFormatter.js';
 import { tryConnect as trySessionConnect, isConnected as isSessionConnected, getBackendType, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as sessionDisconnect } from './sessionStore.js';
 import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
-import { startEmbeddedServer, stopEmbeddedServer, isEmbeddedServerRunning, getEmbeddedInfo } from './webServer.js';
+import { startEmbeddedServer, stopEmbeddedServer, isEmbeddedServerRunning, getEmbeddedInfo, printSessionQr, notifySessionUpdated } from './webServer.js';
 import { estimateTokens, estimateMessagesTokens, createTokenTracker, autoPrune, compactConversation } from './contextManager.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -255,6 +255,31 @@ export async function runCli(argv) {
     console.log(`  ${c.cyan}Session${c.reset}      ${c.gray}${sessionId.slice(0, 8)}...${c.reset} ${c.gray}(${sessionBackend})${c.reset}`);
   }
   console.log(`  ${c.gray}Ctrl+C interrupt · Ctrl+D exit · /help commands · /shortcuts keys${c.reset}`);
+
+  function webActivityToCli(type, data) {
+    const echo = (msg) => { process.stdout.write('\n'); console.log(msg); };
+    if (type === 'user') {
+      echo(`  ${c.cyan}[Web]${c.reset} ${c.green}User:${c.reset} ${(data.message || '').slice(0, 200)}${(data.message || '').length > 200 ? '...' : ''}`);
+      if (typeof rl.prompt === 'function') rl.prompt(true);
+    }
+    if (type === 'progress') echo(`  ${c.cyan}[Web]${c.reset} ${c.dim}Step ${data.step}: ${data.label}${data.detail ? ' — ' + String(data.detail).slice(0, 48) : ''}${c.reset}`);
+    if (type === 'tool') echo(`  ${c.cyan}[Web]${c.reset} ${c.dim}Tool: ${data.tool}${data.detail ? ' — ' + String(data.detail).slice(0, 48) : ''}${c.reset}`);
+    if (type === 'done') {
+      const text = (data.fullResponse || '').trim();
+      if (text) {
+        const preview = text.length > 400 ? text.slice(0, 400) + '...' : text;
+        echo(`  ${c.cyan}[Web]${c.reset} ${c.magenta}Assistant:${c.reset}`);
+        preview.split('\n').forEach((line) => echo(`  ${c.gray}${line}${c.reset}`));
+      }
+      echo(`  ${c.cyan}[Web]${c.reset} ${c.green}Done${c.reset} ${c.dim}(${data.steps} steps, ${Number(data.elapsed).toFixed(1)}s)${c.reset}`);
+      if (typeof rl.prompt === 'function') rl.prompt(true);
+    }
+    if (type === 'error') {
+      echo(`  ${c.cyan}[Web]${c.reset} ${c.red}Error: ${data.message || 'Unknown'}${c.reset}`);
+      if (typeof rl.prompt === 'function') rl.prompt(true);
+    }
+  }
+
   if (!args.noServe) {
     startEmbeddedServer({
       workDir,
@@ -263,8 +288,15 @@ export async function runCli(argv) {
       fileCount,
       ragEnabled,
       noAuth: false,
-    }).then((info) => {
-      if (info) console.log(`  ${c.cyan}Web UI${c.reset}      ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
+      onWebActivity: webActivityToCli,
+    }).then(async (info) => {
+      if (info) {
+        console.log(`  ${c.cyan}Web UI${c.reset}      ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
+        if (info.token) {
+          console.log(`  ${c.dim}Session sharing: scan QR or open${c.reset} ${c.gray}${info.url}${c.reset}`);
+          await printSessionQr(info.url);
+        }
+      }
     });
   }
   console.log('');
@@ -412,10 +444,16 @@ export async function runCli(argv) {
 
       let turnContent = '';
       let interrupted = false;
+      let responseTimedOut = false;
       let firstToken = true;
       const abortController = new AbortController();
       const writeOut = (s) => process.stdout.write(s);
       const formatter = compactDisplay ? null : createStreamFormatter(writeOut);
+
+      let firstResponseTimer = setTimeout(() => {
+        responseTimedOut = true;
+        abortController.abort();
+      }, FIRST_RESPONSE_TIMEOUT_MS);
 
       const promptTokens = estimateMessagesTokens(messages);
       if (!compactDisplay) {
@@ -430,6 +468,8 @@ export async function runCli(argv) {
 
       const interruptHandler = () => {
         interrupted = true;
+        if (firstResponseTimer) clearTimeout(firstResponseTimer);
+        firstResponseTimer = null;
         abortController.abort();
         spinnerStop();
         process.stdout.write(`\n${c.yellow}  ⏹ Generation interrupted (Ctrl+C)${c.reset}\n`);
@@ -437,6 +477,10 @@ export async function runCli(argv) {
       process.once('SIGINT', interruptHandler);
 
       const onToken = (token) => {
+        if (firstResponseTimer) {
+          clearTimeout(firstResponseTimer);
+          firstResponseTimer = null;
+        }
         if (compactDisplay) return;
         if (firstToken) {
           spinnerStop();
@@ -449,6 +493,8 @@ export async function runCli(argv) {
       try {
         turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
       } catch (err) {
+        if (firstResponseTimer) clearTimeout(firstResponseTimer);
+        firstResponseTimer = null;
         spinnerStop();
         process.removeListener('SIGINT', interruptHandler);
         if (interrupted) {
@@ -457,8 +503,10 @@ export async function runCli(argv) {
           }
           return;
         }
-        // Streaming error — show recovery options
-        const action = await showErrorRecovery(ask, 'Model request failed', err.message || err, [
+        const isTimeout = responseTimedOut || err?.name === 'AbortError';
+        const title = isTimeout ? 'Model is taking too long to respond' : 'Model request failed';
+        const detail = isTimeout ? `No response within ${FIRST_RESPONSE_TIMEOUT_MS / 1000} seconds. Try a faster model or retry.` : (err.message || err);
+        const action = await showErrorRecovery(ask, title, detail, [
           { label: 'Retry this step',      action: 'retry' },
           { label: 'Skip and return to prompt', action: 'skip' },
           { label: 'Switch model',          action: 'models' },
@@ -650,6 +698,7 @@ export async function runCli(argv) {
       unleashed: isUnleashedMode(),
       fileCount,
     }).catch(() => {});
+    notifySessionUpdated(sessionId);
   }
 
   function finishJob() {
@@ -771,9 +820,17 @@ export async function runCli(argv) {
                 fileCount,
                 ragEnabled,
                 noAuth: false,
+                onWebActivity: webActivityToCli,
               });
-              if (info) console.log(`  ${c.cyan}Web UI${c.reset} ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
-              else console.log(style.warn('  Web UI failed to start (port in use?).'));
+              if (info) {
+                console.log(`  ${c.cyan}Web UI${c.reset} ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
+                if (info.token) {
+                  console.log(`  ${c.dim}Session sharing: scan QR or open${c.reset} ${c.gray}${info.url}${c.reset}`);
+                  await printSessionQr(info.url);
+                }
+              } else {
+                console.log(style.warn('  Web UI failed to start (port in use?).'));
+              }
             }
             return;
           }
@@ -838,16 +895,24 @@ export async function runCli(argv) {
             return;
           }
 
-          case '/session':
-            if (!isSessionConnected()) {
-              console.log(style.warn('  Sessions not available (no MongoDB or file backend).'));
-            } else {
-              console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
+          case '/session': {
+            const embed = getEmbeddedInfo();
+            console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
+            if (isSessionConnected()) {
               console.log(`  ${c.cyan}Backend${c.reset}     ${c.gray}${getBackendType()}${c.reset}`);
+            }
+            if (embed) {
+              console.log(`  ${c.cyan}Web UI${c.reset}      ${c.gray}${embed.localUrl}${c.reset}`);
+              if (embed.token) {
+                console.log(`  ${c.cyan}Session share${c.reset} ${c.gray}${embed.url}${c.reset} ${c.dim}(scan QR below)${c.reset}`);
+                await printSessionQr(embed.url);
+              }
+            } else {
               console.log(`  ${c.cyan}LAN UI${c.reset}      ${c.gray}http://${getLanAddress()}:${process.env.OLLAMA_CODE_SERVE_PORT || '3141'}${c.reset}`);
-              console.log(`  ${c.gray}Use this ID to resume from another device. Run with --serve to view chat from LAN.${c.reset}`);
+              console.log(`  ${c.gray}Run /serve to start Web UI and get a shareable link + QR.${c.reset}`);
             }
             return;
+          }
 
           case '/pause': case '/save': {
             if (!isSessionConnected()) {

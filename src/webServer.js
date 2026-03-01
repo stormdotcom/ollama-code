@@ -28,6 +28,30 @@ import { c } from './splash.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// CLI → Web real-time: SSE clients per session (sessionId -> Set<res>)
+const sseClients = new Map();
+
+/**
+ * Notify all Web clients subscribed to this session that the session was updated (e.g. from CLI).
+ * Call after saving session from CLI or from Web message handler.
+ */
+export function notifySessionUpdated(sessionId) {
+  const clients = sseClients.get(sessionId);
+  if (!clients || clients.size === 0) return;
+  loadSession(sessionId).then((session) => {
+    if (!session) return;
+    const payload = JSON.stringify(session);
+    for (const res of clients) {
+      try {
+        res.write(`event: update\ndata: ${payload}\n\n`);
+      } catch {
+        clients.delete(res);
+        if (clients.size === 0) sseClients.delete(sessionId);
+      }
+    }
+  }).catch(() => {});
+}
+
 /** Print a QR code for the given URL to the terminal (scan to open session). Optional dep qrcode-terminal. */
 export async function printSessionQr(url) {
   if (!url || typeof url !== 'string') return;
@@ -49,7 +73,7 @@ function emit(res, type, data) {
 
 // ── Shared HTTP server factory ──────────────────────────────────────────────
 
-function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken }) {
+function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken, onWebActivity }) {
   const htmlPath = join(__dirname, '..', 'public', 'index.html');
   let html = existsSync(htmlPath)
     ? readFileSync(htmlPath, 'utf8')
@@ -90,7 +114,17 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
     if (path === '/' || path === '/index.html') {
       if (authToken && !checkAuth(req, url)) {
         res.writeHead(401, { 'Content-Type': 'text/html' });
-        res.end('<h2>Access denied</h2><p>Append <code>?token=YOUR_TOKEN</code> to the URL. Check the terminal for the token.</p>');
+        res.end(
+          '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:1rem;">' +
+          '<h2>Access denied</h2>' +
+          '<p>This session requires a token. Get it from the terminal where <code>ollama-code</code> is running:</p>' +
+          '<ul style="margin:1rem 0;">' +
+          '<li><strong>QR code</strong> — Look at the terminal for a QR code; scan it with your phone to open this session.</li>' +
+          '<li><strong>Token</strong> — Or copy the token from the terminal and append <code>?token=YOUR_TOKEN</code> to this URL.</li>' +
+          '</ul>' +
+          '<p style="color:#666;">Example: <code>' + (req.headers.host || '') + '?token=abc123...</code></p>' +
+          '</body></html>'
+        );
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -135,6 +169,44 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
       return;
     }
 
+    // SSE: CLI → Web real-time (subscribe to session updates)
+    const eventsMatch = path.match(/^\/api\/sessions\/([^/]+)\/events\/?$/);
+    if (eventsMatch && req.method === 'GET') {
+      const sessionId = eventsMatch[1];
+      if (!checkAuth(req, url)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      if (!isSessionConnected()) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Sessions not available' }));
+        return;
+      }
+      let clients = sseClients.get(sessionId);
+      if (!clients) {
+        clients = new Set();
+        sseClients.set(sessionId, clients);
+      }
+      clients.add(res);
+      res.on('close', () => {
+        clients.delete(res);
+        if (clients.size === 0) sseClients.delete(sessionId);
+      });
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write(': connected\n\n');
+      // Send current session state immediately
+      loadSession(sessionId).then((session) => {
+        if (session && clients.has(res)) res.write(`event: update\ndata: ${JSON.stringify(session)}\n\n`);
+      }).catch(() => {});
+      return;
+    }
+
     const messageMatch = path.match(/^\/api\/sessions\/([^/]+)\/message$/);
     if (messageMatch && req.method === 'POST') {
       const sessionId = messageMatch[1];
@@ -155,6 +227,10 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
         return;
       }
 
+      if (typeof onWebActivity === 'function') {
+        onWebActivity('user', { sessionId, message: userInput, model: parsed.model });
+      }
+
       let session = await loadSession(sessionId);
       let messages = session?.messages?.map((m) => ({ role: m.role, content: m.content })) || [
         { role: 'system', content: systemPrompt },
@@ -167,7 +243,19 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
         'Connection': 'keep-alive',
       });
 
-      const send = (type, data) => emit(res, type, data);
+      let responseBuffer = '';
+      const send = (type, data) => {
+        emit(res, type, data);
+        if (typeof onWebActivity === 'function') {
+          if (type === 'progress') onWebActivity('progress', data);
+          if (type === 'tool') onWebActivity('tool', data);
+          if (type === 'token') {
+            responseBuffer += (data.text || '');
+            onWebActivity('token', data);
+          }
+          if (type === 'error') onWebActivity('error', data);
+        }
+      };
 
       if (ragEnabled) {
         try {
@@ -207,9 +295,10 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
         const onToken = (token) => send('token', { text: token });
 
         try {
-          turnContent = await streamChat(model, messages, onToken, { signal: abortController.signal });
+          turnContent = await streamChat(model, messages, (token) => send('token', { text: token }), { signal: abortController.signal });
         } catch (err) {
           send('error', { message: err.message || String(err) });
+          if (typeof onWebActivity === 'function') onWebActivity('error', { message: err.message || String(err) });
           res.end();
           return;
         }
@@ -236,7 +325,9 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
       }
 
       const elapsed = (Date.now() - turnStart) / 1000;
-      send('done', { steps: stepNum, elapsed, contextTokens: estimateMessagesTokens(messages) });
+      const doneData = { steps: stepNum, elapsed, contextTokens: estimateMessagesTokens(messages), fullResponse: responseBuffer };
+      send('done', doneData);
+      if (typeof onWebActivity === 'function') onWebActivity('done', doneData);
       send('messages', { messages });
 
       await autoSave(sessionId, messages, model, {
@@ -245,6 +336,7 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
         fileCount,
       });
 
+      notifySessionUpdated(sessionId);
       res.end();
       return;
     }
@@ -272,13 +364,13 @@ let embeddedToken = null;
  * Start the web server in the background alongside the CLI.
  * Returns { token, port, url } or null if it fails.
  */
-export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, noAuth = false }) {
+export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, noAuth = false, onWebActivity = null }) {
   if (embeddedServer) return getEmbeddedInfo(); // already running
 
   const authToken = noAuth ? null : randomBytes(16).toString('hex');
   embeddedToken = authToken;
 
-  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken });
+  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken, onWebActivity });
 
   return new Promise((resolve) => {
     server.on('error', (err) => {
@@ -422,6 +514,9 @@ export async function runServe(argv) {
     if (authToken) {
       console.log(`  Auth:    Token-based (use URL above or pass X-Auth-Token header)`);
       console.log(`  Token:   ${authToken}`);
+      const qrUrl = uniqueIps.length > 0 ? `http://${uniqueIps[0]}:${port}${tokenParam}` : `http://localhost:${port}${tokenParam}`;
+      console.log(`  ${c.dim}Scan QR code below to open session on your phone:${c.reset}`);
+      printSessionQr(qrUrl).catch(() => {});
     } else {
       console.log(`  Auth:    DISABLED (--no-auth). Anyone on LAN can access.`);
     }
