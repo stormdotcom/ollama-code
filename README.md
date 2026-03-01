@@ -151,6 +151,101 @@ ollama-code
 
    Replace `C:\path\to\ollama-code` with the actual path to this repo.
 
+---
+
+## Install on macOS
+
+1. **Install Node.js 18+**  
+   [nodejs.org](https://nodejs.org) or Homebrew: `brew install node`
+
+2. **Install and run Ollama**  
+   [ollama.com](https://ollama.com) or Homebrew: `brew install ollama`. Start the Ollama app or run `ollama serve`. Then: `ollama pull qwen2.5-coder:7b`
+
+3. **Get the CLI**  
+   Clone or download this repo, then open Terminal in the repo folder.
+
+4. **Run without npm install** (no dependencies):
+
+   ```bash
+   node bin/ollama-code.js
+   ```
+
+   With a model:
+
+   ```bash
+   node bin/ollama-code.js --model deepseek-coder
+   ```
+
+5. **Optional: install globally** so `ollama-code` works from any folder:
+
+   ```bash
+   npm install -g .
+   ollama-code
+   ```
+
+6. **Optional: run from any directory** — Add the repo to your PATH or create a wrapper (e.g. in `~/bin/ollama-code`):
+
+   ```bash
+   #!/bin/sh
+   exec node "/path/to/ollama-code/bin/ollama-code.js" "$@"
+   ```
+
+   Then `chmod +x ~/bin/ollama-code` and ensure `~/bin` is in your PATH.
+
+---
+
+## Install on Linux (Ubuntu)
+
+1. **Install Node.js 18+**  
+   [nodejs.org](https://nodejs.org) or NodeSource:
+
+   ```bash
+   curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+   sudo apt-get install -y nodejs
+   ```
+
+2. **Install and run Ollama**  
+   Follow [Ollama Linux install](https://ollama.com/download/linux) or:
+
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ollama serve   # or start the ollama service
+   ollama pull qwen2.5-coder:7b
+   ```
+
+3. **Get the CLI**  
+   Clone or download this repo, then open a terminal in the repo folder.
+
+4. **Run without npm install** (no dependencies):
+
+   ```bash
+   node bin/ollama-code.js
+   ```
+
+   With a model:
+
+   ```bash
+   node bin/ollama-code.js --model deepseek-coder
+   ```
+
+5. **Optional: install globally** so `ollama-code` works from any folder:
+
+   ```bash
+   npm install -g .
+   ollama-code
+   ```
+
+6. **Optional: run from any directory** — Add the repo to your PATH or create a wrapper (e.g. `~/bin/ollama-code`):
+
+   ```bash
+   #!/bin/bash
+   exec node "/path/to/ollama-code/bin/ollama-code.js" "$@"
+   ```
+
+   Then `chmod +x ~/bin/ollama-code` and ensure `~/bin` is in your PATH.
+
+---
+
 ## Plugins
 
 This repository includes plugins that extend the CLI with custom commands and agents. See the [plugins directory](./plugins/README.md) for documentation.
