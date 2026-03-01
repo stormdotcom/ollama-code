@@ -49,6 +49,7 @@ OLLAMA-CODE-CLI uses these optional environment variables to talk to Ollama:
 | `OLLAMA_TLS` | Set to `1` to use `https` instead of `http` (only when using `OLLAMA_HOST`/`OLLAMA_PORT`). | — |
 | `OLLAMA_CODE_SERVE_HOST` | Bind address for `--serve` (use `0.0.0.0` for LAN). | `0.0.0.0` |
 | `OLLAMA_CODE_SERVE_PORT` | Port for `--serve` web UI. | `3141` |
+| `OLLAMA_CODE_CMD_TIMEOUT` | Command execution timeout in ms (default 20 min). | `1200000` |
 
 **Examples**
 

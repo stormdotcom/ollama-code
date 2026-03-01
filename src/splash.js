@@ -44,6 +44,7 @@ export function printSplash(model, version) {
   console.log(`  ${c.cyan}Model   ${c.reset}${c.bold}${model}${c.reset}`);
   console.log(`  ${c.cyan}Version ${c.reset}${c.gray}${version} (Local-First Custom Fork)${c.reset}`);
   console.log(`  ${c.cyan}Server  ${c.reset}${c.gray}${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}${c.reset}`);
+  console.log(`  ${c.cyan}LAN UI  ${c.reset}${c.gray}ollama-code --serve  →  http://<your-ip>:3141${c.reset}`);
   console.log('');
   console.log(`  ${c.green}Type a task${c.reset} or use ${c.yellow}/help${c.reset} for commands.`);
   console.log(`  ${c.gray}Tools: read_file, write_file, edit_file, execute_command, search_code${c.reset}`);
@@ -66,6 +67,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/clear${c.reset}             Clear conversation history`);
   console.log('');
   console.log(`  ${c.magenta}${c.bold}Sessions (MongoDB)${c.reset}`);
+  console.log(`  ${c.yellow}/session${c.reset}          Show current session ID (for LAN web view)`);
   console.log(`  ${c.yellow}/save [name]${c.reset}       Save current session`);
   console.log(`  ${c.yellow}/sessions${c.reset}          List saved sessions`);
   console.log(`  ${c.yellow}/resume <id|#>${c.reset}    Resume a saved session`);

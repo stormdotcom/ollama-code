@@ -159,7 +159,10 @@ export async function runCli(argv) {
       console.log(`    ${c.green}✓${c.reset} ${rule}`);
     }
   }
-  console.log('');
+  if (mongoOk) {
+    console.log(`  ${c.cyan}Session${c.reset}  ${c.gray}${sessionId}${c.reset} ${c.gray}(use /session to copy, view from LAN via --serve)${c.reset}`);
+    console.log('');
+  }
 
   // ── Shortcuts info ──────────────────────────────────────────────────
   console.log(`  ${c.gray}Shortcuts: Ctrl+C interrupt, Ctrl+D exit, Ctrl+L clear screen${c.reset}`);
@@ -197,7 +200,10 @@ export async function runCli(argv) {
   let jobRunning = false;
   const inputQueue = [];
 
+  const seenCommandsThisTurn = new Set();
+
   async function runAgenticTurn(userInput) {
+    seenCommandsThisTurn.clear();
     // RAG context injection
     if (ragEnabled && isChromaConnected()) {
       try {
@@ -300,13 +306,17 @@ export async function runCli(argv) {
         const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
         const callKey = `${call.tag}:${call.innerText.trim()}`;
         let result;
-        if (seenToolCalls.has(callKey)) {
+        if (call.tag === 'execute_command' && seenCommandsThisTurn.has(callKey)) {
+          result = `[execute_command] (skipped — already ran this turn)\n${call.innerText.trim()}`;
+          if (!compactMode) console.log(`  ${c.gray}  (skipped — already ran this turn)${c.reset}`);
+        } else if (seenToolCalls.has(callKey)) {
           result = seenToolCalls.get(callKey);
-          if (!compactMode) console.log(`  ${c.gray}  (reused — duplicate tool call)${c.reset}`);
+          if (!compactMode) console.log(`  ${c.gray}  (reused — duplicate in same batch)${c.reset}`);
         } else {
           spinnerForTool(call.tag, compactMode ? `Step ${stepNum}  ${detail}` : detail);
           result = await executeToolCall(workDir, call);
           seenToolCalls.set(callKey, result);
+          if (call.tag === 'execute_command') seenCommandsThisTurn.add(callKey);
         }
         const toolLabel = call.tag.replace(/_/g, ' ');
         spinnerStop(compactMode
@@ -474,6 +484,15 @@ export async function runCli(argv) {
           }
           continue;
         }
+
+        case '/session':
+          if (!isMongoConnected()) {
+            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          } else {
+            console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
+            console.log(`  ${c.gray}Use this ID to resume from another device. Run with --serve to view chat from LAN.${c.reset}`);
+          }
+          continue;
 
         case '/save': {
           if (!isMongoConnected()) {

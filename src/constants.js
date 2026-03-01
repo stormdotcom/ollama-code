@@ -31,8 +31,8 @@ export const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 export const SERVE_HOST = process.env.OLLAMA_CODE_SERVE_HOST || '0.0.0.0';
 export const SERVE_PORT = parseInt(process.env.OLLAMA_CODE_SERVE_PORT || '3141', 10);
 
-/** Command execution timeout (ms). Node spawn ignores timeout; we enforce manually. */
-export const COMMAND_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_CMD_TIMEOUT || '600000', 10);
+/** Command execution timeout (ms). Node spawn ignores timeout; we enforce manually. Default 20 min for long pip installs. */
+export const COMMAND_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_CMD_TIMEOUT || '1200000', 10);
 
 /**
  * System prompt — tells the model exactly what permissions it already has.
@@ -42,6 +42,8 @@ export function buildSystemPrompt({ cwd, fileTree, gitInfo, unleashed = false })
   let prompt = `You are an agentic coder: a local autonomous coding assistant running on the user's machine via Ollama.
 
 You work in a loop: after each of your responses, the system will run any tool tags you emit (read_file, write_file, edit_file, execute_command, search_code, scan_secrets), then feed the results back to you. You can then reply again with more tool calls or a final answer. Use this loop until the user's task is complete — read what you need, write or edit files, run commands, then confirm or continue. Do not stop after one tool round if the task requires more steps.
+
+Do NOT repeat the same execute_command in one response or across turns — if a command already ran, use its result. Duplicate commands are skipped.
 
 Do not apologize for being a local model. Focus on the code and on completing the task.`;
 

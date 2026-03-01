@@ -156,6 +156,13 @@ const SPINNER_UPDATE_THROTTLE_MS = 500;
 
 function runCommand(cwd, command) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
     spinnerStart(`Executing: ${command.slice(0, 50)}...`, c.magenta);
     const proc = spawn(command, [], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true });
     let stdout = '';
@@ -163,11 +170,10 @@ function runCommand(cwd, command) {
     let lastSpinnerUpdate = 0;
 
     const timeoutId = setTimeout(() => {
-      if (proc.kill('SIGTERM')) {
-        setTimeout(() => proc.kill('SIGKILL'), 2000);
-      }
+      proc.kill('SIGTERM');
+      setTimeout(() => { try { proc.kill('SIGKILL'); } catch { /* ignore */ } }, 2000);
       spinnerStop(`${c.red}✗${c.reset} Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s`);
-      resolve({
+      finish({
         code: 124,
         stdout: stdout.trim(),
         stderr: (stderr.trim() + `\n[Timed out after ${COMMAND_TIMEOUT_MS / 1000}s]`).trim(),
@@ -186,15 +192,17 @@ function runCommand(cwd, command) {
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
     proc.on('close', (code, signal) => {
       clearTimeout(timeoutId);
+      if (settled) return;
       spinnerStop(code === 0
         ? `${c.green}✓${c.reset} Command completed`
         : `${c.yellow}⚠${c.reset} Command exited with code ${code}`);
-      resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+      finish({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
     });
     proc.on('error', (err) => {
       clearTimeout(timeoutId);
+      if (settled) return;
       spinnerStop(`${c.red}✗${c.reset} Command failed`);
-      resolve({ code: 1, stdout: '', stderr: err.message });
+      finish({ code: 1, stdout: '', stderr: err.message });
     });
   });
 }
