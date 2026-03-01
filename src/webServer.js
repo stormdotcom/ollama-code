@@ -1,6 +1,7 @@
 /**
  * Web server for LAN session control.
- * Serves a mobile-responsive chat UI and streams agent progress via HTTP chunked response.
+ * Can run standalone (--serve) or embedded alongside the CLI (default).
+ * Serves a mobile-responsive chat UI and streams agent progress via HTTP.
  * Access from any device on your LAN: http://<host-ip>:3141?token=<auth-token>
  */
 import { createServer } from 'http';
@@ -23,6 +24,7 @@ import { scanProjectTree } from './projectScanner.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { isUncensoredModel, setUnleashedMode, isUnleashedMode, setServeMode } from './security.js';
 import { autoPrune, estimateMessagesTokens } from './contextManager.js';
+import { c } from './splash.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MAX_TOOL_ITERATIONS = 10;
@@ -31,61 +33,19 @@ function emit(res, type, data) {
   res.write(JSON.stringify({ type, ...data }) + '\n');
 }
 
-function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, port: SERVE_PORT, host: SERVE_HOST, noAuth: false };
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--port' && argv[i + 1]) args.port = parseInt(argv[++i], 10);
-    if (argv[i] === '--host' && argv[i + 1]) args.host = argv[++i];
-    if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
-    if (argv[i] === '--no-auth') args.noAuth = true;
-  }
-  return args;
-}
+// ── Shared HTTP server factory ──────────────────────────────────────────────
 
-export async function runServe(argv) {
-  const args = parseArgs(argv);
-  setServeMode(true);
-
-  // Generate auth token
-  const authToken = args.noAuth ? null : randomBytes(16).toString('hex');
-
-  const workDir = cwd();
-  const preflight = await checkOllamaRunning();
-  if (!preflight.ok) {
-    console.error('Ollama is not running. Start it first.');
-    process.exit(1);
-  }
-
-  let currentModel = args.model;
-  if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
-    currentModel = preflight.models[0];
-  }
-
-  if (isUncensoredModel(currentModel)) setUnleashedMode(true);
-
-  const settings = loadSettings(workDir);
-  const fileTree = scanProjectTree(workDir);
-  const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
-  const gitContext = await getGitContext();
-  const gitInfo = formatGitContextForPrompt(gitContext);
-  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
-
-  await trySessionConnect(workDir);
-  tryConnectChroma();
-  const ragEnabled = isChromaConnected();
-
+function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken }) {
   const htmlPath = join(__dirname, '..', 'public', 'index.html');
   let html = existsSync(htmlPath)
     ? readFileSync(htmlPath, 'utf8')
     : '<!DOCTYPE html><html><body><h1>Ollama Code</h1><p>public/index.html not found</p></body></html>';
 
-  // Inject auth token into HTML so the frontend includes it in API calls
   if (authToken) {
     html = html.replace(
       "const API = '';",
       `const API = '';\n    const AUTH_TOKEN = '${authToken}';`
     );
-    // Patch fetch calls to include token header
     html = html.replace(
       /fetch\(API \+/g,
       "fetch(API +"
@@ -93,7 +53,7 @@ export async function runServe(argv) {
   }
 
   function checkAuth(req, url) {
-    if (!authToken) return true; // --no-auth mode
+    if (!authToken) return true;
     const queryToken = url.searchParams.get('token');
     const headerToken = req.headers['x-auth-token'];
     return queryToken === authToken || headerToken === authToken;
@@ -113,7 +73,6 @@ export async function runServe(argv) {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     const path = url.pathname;
 
-    // Serve HTML (with token in query param for initial access)
     if (path === '/' || path === '/index.html') {
       if (authToken && !checkAuth(req, url)) {
         res.writeHead(401, { 'Content-Type': 'text/html' });
@@ -125,7 +84,6 @@ export async function runServe(argv) {
       return;
     }
 
-    // All API routes require auth
     if (path.startsWith('/api/') && !checkAuth(req, url)) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Unauthorized. Include token as X-Auth-Token header or ?token= query param.' }));
@@ -214,7 +172,6 @@ export async function runServe(argv) {
 
       messages.push({ role: 'user', content: userInput });
 
-      // Auto-prune context
       const pruneResult = autoPrune(messages);
       if (pruneResult.pruned) {
         messages = pruneResult.messages;
@@ -288,6 +245,137 @@ export async function runServe(argv) {
     res.writeHead(404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Not found' }));
   });
+
+  return server;
+}
+
+// ── Embedded server (runs alongside CLI) ────────────────────────────────────
+
+let embeddedServer = null;
+let embeddedToken = null;
+
+/**
+ * Start the web server in the background alongside the CLI.
+ * Returns { token, port, url } or null if it fails.
+ */
+export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, noAuth = false }) {
+  if (embeddedServer) return getEmbeddedInfo(); // already running
+
+  const authToken = noAuth ? null : randomBytes(16).toString('hex');
+  embeddedToken = authToken;
+
+  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken });
+
+  return new Promise((resolve) => {
+    server.on('error', (err) => {
+      // Port in use or other error — silently fail, CLI continues fine
+      embeddedServer = null;
+      resolve(null);
+    });
+
+    server.listen(SERVE_PORT, SERVE_HOST, () => {
+      embeddedServer = server;
+      // Prevent the server from keeping Node alive when CLI exits
+      server.unref();
+      resolve(getEmbeddedInfo());
+    });
+  });
+}
+
+/**
+ * Stop the embedded web server.
+ */
+export function stopEmbeddedServer() {
+  if (!embeddedServer) return false;
+  embeddedServer.close();
+  embeddedServer = null;
+  embeddedToken = null;
+  return true;
+}
+
+/**
+ * Check if the embedded server is running.
+ */
+export function isEmbeddedServerRunning() {
+  return !!embeddedServer;
+}
+
+/**
+ * Get info about the running embedded server.
+ */
+export function getEmbeddedInfo() {
+  if (!embeddedServer) return null;
+  const addr = embeddedServer.address();
+  if (!addr) return null;
+  const port = addr.port;
+  let lanIp = '127.0.0.1';
+  try {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name] || []) {
+        if (net.family === 'IPv4' && !net.internal) {
+          lanIp = net.address;
+          break;
+        }
+      }
+      if (lanIp !== '127.0.0.1') break;
+    }
+  } catch { /* ignore */ }
+  const tokenParam = embeddedToken ? `?token=${embeddedToken}` : '';
+  return {
+    token: embeddedToken,
+    port,
+    lanIp,
+    url: `http://${lanIp}:${port}${tokenParam}`,
+    localUrl: `http://localhost:${port}${tokenParam}`,
+  };
+}
+
+// ── Standalone serve mode (--serve flag) ────────────────────────────────────
+
+function parseStandaloneArgs(argv) {
+  const args = { model: DEFAULT_MODEL, port: SERVE_PORT, host: SERVE_HOST, noAuth: false };
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--port' && argv[i + 1]) args.port = parseInt(argv[++i], 10);
+    if (argv[i] === '--host' && argv[i + 1]) args.host = argv[++i];
+    if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
+    if (argv[i] === '--no-auth') args.noAuth = true;
+  }
+  return args;
+}
+
+export async function runServe(argv) {
+  const args = parseStandaloneArgs(argv);
+  setServeMode(true);
+
+  const authToken = args.noAuth ? null : randomBytes(16).toString('hex');
+
+  const workDir = cwd();
+  const preflight = await checkOllamaRunning();
+  if (!preflight.ok) {
+    console.error('Ollama is not running. Start it first.');
+    process.exit(1);
+  }
+
+  let currentModel = args.model;
+  if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
+    currentModel = preflight.models[0];
+  }
+
+  if (isUncensoredModel(currentModel)) setUnleashedMode(true);
+
+  const settings = loadSettings(workDir);
+  const fileTree = scanProjectTree(workDir);
+  const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
+  const gitContext = await getGitContext();
+  const gitInfo = formatGitContextForPrompt(gitContext);
+  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+
+  await trySessionConnect(workDir);
+  tryConnectChroma();
+  const ragEnabled = isChromaConnected();
+
+  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken });
 
   server.listen(args.port, args.host, () => {
     const addr = server.address();
