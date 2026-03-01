@@ -12,6 +12,8 @@ import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings
 import { scanProjectTree } from './projectScanner.js';
 import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool } from './spinner.js';
 import { createStreamFormatter } from './outputFormatter.js';
+import { tryConnect as tryMongoConnect, isConnected as isMongoConnected, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as mongoDisconnect } from './sessionStore.js';
+import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -30,11 +32,13 @@ function getVersion() {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, version: false, unleashed: false };
+  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' || argv[i] === '-v') args.version = true;
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
     if (argv[i] === '--unleashed' || argv[i] === '--uncensored') args.unleashed = true;
+    if (argv[i] === '--compact') args.compact = true;
+    if (argv[i] === '--resume' && argv[i + 1]) args.resume = argv[++i];
   }
   return args;
 }
@@ -108,16 +112,49 @@ export async function runCli(argv) {
     ? `${c.green}✓${c.reset} Git context loaded`
     : `${c.gray}─${c.reset} No git repository detected`);
 
+  // ── MongoDB session store ─────────────────────────────────────────────
+  spinnerStart('Connecting to MongoDB...', c.cyan);
+  const mongoOk = await tryMongoConnect();
+  spinnerStop(mongoOk
+    ? `${c.green}✓${c.reset} MongoDB connected — sessions enabled`
+    : `${c.gray}─${c.reset} MongoDB unavailable — sessions disabled ${c.gray}(npm i mongodb)${c.reset}`);
+
+  // ── ChromaDB RAG ─────────────────────────────────────────────────────
+  spinnerStart('Connecting to ChromaDB...', c.cyan);
+  const chromaOk = await tryConnectChroma();
+  spinnerStop(chromaOk
+    ? `${c.green}✓${c.reset} ChromaDB connected — RAG enabled`
+    : `${c.gray}─${c.reset} ChromaDB unavailable — RAG disabled ${c.gray}(chroma run)${c.reset}`);
+
+  let ragEnabled = chromaOk;
+
   // ── Build system prompt ───────────────────────────────────────────────
   spinnerStart('Preparing system prompt...', c.magenta);
   const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
   spinnerStop(`${c.green}✓${c.reset} System prompt ready`);
 
+  let sessionId = generateSessionId();
   let messages = [];
   function resetMessages() {
     messages = [{ role: 'system', content: systemPrompt }];
   }
-  resetMessages();
+
+  // ── Resume session or start fresh ──────────────────────────────────
+  if (args.resume && mongoOk) {
+    spinnerStart('Resuming session...', c.cyan);
+    const session = await loadSession(args.resume);
+    if (session) {
+      messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
+      sessionId = session.sessionId;
+      currentModel = session.model || currentModel;
+      spinnerStop(`${c.green}✓${c.reset} Resumed session ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages)`);
+    } else {
+      spinnerStop(`${c.yellow}!${c.reset} Session not found, starting fresh`);
+      resetMessages();
+    }
+  } else {
+    resetMessages();
+  }
 
   // ── Permission summary ────────────────────────────────────────────────
   console.log(`  ${c.cyan}Permissions:${c.reset}`);
@@ -144,9 +181,9 @@ export async function runCli(argv) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = (prompt) => new Promise((resolve) => rl.question(prompt, resolve));
 
-  // Ctrl+D to exit cleanly
-  rl.on('close', () => {
+  rl.on('close', async () => {
     console.log(style.info('\nGoodbye.'));
+    await mongoDisconnect();
     process.exit(0);
   });
 
@@ -166,23 +203,47 @@ export async function runCli(argv) {
     });
   }
 
+  let compactMode = args.compact;
   let jobRunning = false;
   const inputQueue = [];
 
   async function runAgenticTurn(userInput) {
+    // RAG context injection
+    if (ragEnabled && isChromaConnected()) {
+      try {
+        const ragResults = await searchRelevant(workDir, userInput, 5);
+        if (ragResults.length > 0) {
+          const ragContext = ragResults.map((r) =>
+            `--- ${r.filePath} (lines ${r.startLine}-${r.endLine}) ---\n${r.text}`
+          ).join('\n\n');
+          messages.push({
+            role: 'user',
+            content: `[Relevant code from your project — use as context]\n${ragContext}`,
+          });
+          if (!compactMode) {
+            console.log(`  ${c.cyan}RAG${c.reset} ${c.gray}injected ${ragResults.length} relevant code chunk(s)${c.reset}`);
+          }
+        }
+      } catch { /* RAG is best-effort */ }
+    }
+
     messages.push({ role: 'user', content: userInput });
     let iteration = 0;
+    let stepNum = 0;
+    const turnStart = Date.now();
+
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
+      stepNum++;
 
       let turnContent = '';
       let interrupted = false;
       let firstToken = true;
       const abortController = new AbortController();
       const writeOut = (s) => process.stdout.write(s);
-      const formatter = createStreamFormatter(writeOut);
+      const formatter = compactMode ? null : createStreamFormatter(writeOut);
 
-      spinnerStart('Thinking...', c.magenta);
+      spinnerStart(compactMode ? `Step ${stepNum}  Thinking...` : 'Thinking...', c.magenta);
 
       const interruptHandler = () => {
         interrupted = true;
@@ -193,6 +254,7 @@ export async function runCli(argv) {
       process.once('SIGINT', interruptHandler);
 
       const onToken = (token) => {
+        if (compactMode) return;
         if (firstToken) {
           spinnerStop();
           process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
@@ -226,26 +288,38 @@ export async function runCli(argv) {
         return;
       }
 
-      formatter.flush();
-      process.stdout.write(c.reset + '\n');
+      if (compactMode) {
+        spinnerStop(`${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}Thinking${c.reset}`);
+      } else {
+        formatter.flush();
+        process.stdout.write(c.reset + '\n');
+      }
       messages.push({ role: 'assistant', content: turnContent });
 
       const toolCalls = parseToolCalls(turnContent);
       if (toolCalls.length === 0) break;
 
-      console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
+      if (!compactMode) {
+        console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
+      }
 
       const results = [];
       for (const call of toolCalls) {
+        stepNum++;
         const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
-        spinnerForTool(call.tag, detail);
+        spinnerForTool(call.tag, compactMode ? `Step ${stepNum}  ${detail}` : detail);
         const result = await executeToolCall(workDir, call);
-        spinnerStop(`${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
-        console.log(style.toolResult('  ' + result.split('\n')[0]));
-        if (result.split('\n').length > 1) {
-          const extra = result.split('\n').slice(1).join('\n');
-          if (extra.length < 500) console.log(c.gray + extra + c.reset);
-          else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
+        const toolLabel = call.tag.replace(/_/g, ' ');
+        spinnerStop(compactMode
+          ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`
+          : `${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
+        if (!compactMode) {
+          console.log(style.toolResult('  ' + result.split('\n')[0]));
+          if (result.split('\n').length > 1) {
+            const extra = result.split('\n').slice(1).join('\n');
+            if (extra.length < 500) console.log(c.gray + extra + c.reset);
+            else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
+          }
         }
         results.push(result);
       }
@@ -259,6 +333,17 @@ export async function runCli(argv) {
     if (iteration >= MAX_TOOL_ITERATIONS) {
       console.log(style.warn(`  (Stopped after ${MAX_TOOL_ITERATIONS} tool iterations)`));
     }
+
+    if (compactMode) {
+      const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
+      console.log(`  ${c.green}Done${c.reset}    ${c.gray}${stepNum} step(s) completed${c.reset} ${c.gray}${elapsed}s${c.reset}\n`);
+    }
+
+    await autoSave(sessionId, messages, currentModel, {
+      cwd: workDir,
+      unleashed: isUnleashedMode(),
+      fileCount,
+    });
   }
 
   function processQueue() {
@@ -318,6 +403,13 @@ export async function runCli(argv) {
           console.log('');
           continue;
         }
+
+        case '/compact':
+          compactMode = !compactMode;
+          console.log(compactMode
+            ? `  ${c.cyan}Compact mode ON${c.reset} ${c.gray}— model output hidden, showing progress steps only${c.reset}`
+            : `  ${c.cyan}Compact mode OFF${c.reset} ${c.gray}— full model output visible${c.reset}`);
+          continue;
 
         case '/clear':
           resetMessages();
@@ -383,6 +475,160 @@ export async function runCli(argv) {
           }
           continue;
         }
+
+        case '/save': {
+          if (!isMongoConnected()) {
+            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+            continue;
+          }
+          const name = cmdArg || null;
+          spinnerStart('Saving session...', c.cyan);
+          await saveSession(sessionId, { name, model: currentModel, messages, metadata: { cwd: workDir, unleashed: isUnleashedMode(), fileCount } });
+          spinnerStop(`${c.green}✓${c.reset} Session saved ${name ? `as "${name}"` : `(${sessionId.slice(0, 8)})`}`);
+          continue;
+        }
+
+        case '/sessions': {
+          if (!isMongoConnected()) {
+            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+            continue;
+          }
+          spinnerStart('Loading sessions...', c.cyan);
+          const sessions = await listSessions(20);
+          spinnerStop();
+          if (sessions.length === 0) {
+            console.log(style.info('  No saved sessions.'));
+          } else {
+            console.log('');
+            console.log(`  ${c.magenta}${c.bold}Saved Sessions${c.reset}`);
+            sessions.forEach((s, i) => {
+              const num = `${i + 1}.`;
+              const label = s.name || s.sessionId.slice(0, 8);
+              const date = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '?';
+              const active = s.sessionId === sessionId ? ` ${c.green}← current${c.reset}` : '';
+              console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${label}${c.reset} ${c.gray}(${s.model}, ${date})${c.reset}${active}`);
+            });
+            console.log('');
+            console.log(`  ${c.gray}Use /resume <number> to load a session${c.reset}`);
+            console.log('');
+          }
+          continue;
+        }
+
+        case '/resume': {
+          if (!isMongoConnected()) {
+            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+            continue;
+          }
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /resume <number|name|id>${c.reset}`);
+            continue;
+          }
+          spinnerStart('Loading session...', c.cyan);
+          const idx = parseInt(cmdArg, 10);
+          let session = null;
+          if (Number.isInteger(idx) && idx >= 1) {
+            const all = await listSessions(20);
+            if (idx <= all.length) {
+              session = await loadSession(all[idx - 1].sessionId);
+            }
+          }
+          if (!session) {
+            session = await loadSession(cmdArg);
+          }
+          if (session) {
+            messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
+            sessionId = session.sessionId;
+            currentModel = session.model || currentModel;
+            spinnerStop(`${c.green}✓${c.reset} Resumed ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages, model: ${currentModel})`);
+          } else {
+            spinnerStop(`${c.yellow}!${c.reset} Session not found`);
+          }
+          continue;
+        }
+
+        case '/delete-session': {
+          if (!isMongoConnected()) {
+            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+            continue;
+          }
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /delete-session <number|id>${c.reset}`);
+            continue;
+          }
+          const delIdx = parseInt(cmdArg, 10);
+          let delId = cmdArg;
+          if (Number.isInteger(delIdx) && delIdx >= 1) {
+            const all = await listSessions(20);
+            if (delIdx <= all.length) delId = all[delIdx - 1].sessionId;
+          }
+          const deleted = await deleteSession(delId);
+          console.log(deleted
+            ? style.success(`  Session deleted.`)
+            : style.warn(`  Session not found.`));
+          continue;
+        }
+
+        case '/index': {
+          if (!isChromaConnected()) {
+            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+            continue;
+          }
+          spinnerStart('Indexing project into ChromaDB...', c.cyan);
+          try {
+            const result = await indexProject(workDir, (done, total, file) => {
+              if (file !== 'done') spinnerUpdate(`Indexing ${done + 1}/${total}: ${file}`);
+            });
+            spinnerStop(`${c.green}✓${c.reset} Indexed ${c.bold}${result.files}${c.reset} file(s), ${c.bold}${result.chunks}${c.reset} chunk(s) into ChromaDB`);
+          } catch (err) {
+            spinnerStop(`${c.red}✗${c.reset} Indexing failed`);
+            console.log(style.error('  ' + (err.message || err)));
+          }
+          continue;
+        }
+
+        case '/search': {
+          if (!isChromaConnected()) {
+            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+            continue;
+          }
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /search <query>  — semantic search your codebase${c.reset}`);
+            continue;
+          }
+          spinnerStart('Searching codebase...', c.cyan);
+          try {
+            const results = await searchRelevant(workDir, cmdArg, 5);
+            spinnerStop();
+            if (results.length === 0) {
+              console.log(style.info('  No results found.'));
+            } else {
+              console.log('');
+              console.log(`  ${c.magenta}${c.bold}Search Results${c.reset} ${c.gray}for "${cmdArg}"${c.reset}`);
+              results.forEach((r, i) => {
+                console.log(`  ${c.cyan}${i + 1}.${c.reset} ${c.white}${r.filePath}${c.reset} ${c.gray}(lines ${r.startLine}-${r.endLine}, dist: ${r.distance.toFixed(3)})${c.reset}`);
+                const preview = r.text.split('\n').slice(0, 3).join('\n    ');
+                console.log(`    ${c.gray}${preview}${c.reset}`);
+              });
+              console.log('');
+            }
+          } catch (err) {
+            spinnerStop(`${c.red}✗${c.reset} Search failed`);
+            console.log(style.error('  ' + (err.message || err)));
+          }
+          continue;
+        }
+
+        case '/rag':
+          if (!isChromaConnected()) {
+            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+            continue;
+          }
+          ragEnabled = !ragEnabled;
+          console.log(ragEnabled
+            ? `  ${c.cyan}RAG ON${c.reset} ${c.gray}— relevant code chunks injected before each prompt${c.reset}`
+            : `  ${c.cyan}RAG OFF${c.reset} ${c.gray}— no automatic context injection${c.reset}`);
+          continue;
 
         case '/scan': {
           const scanPath = cmdArg || '.';

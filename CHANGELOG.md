@@ -4,6 +4,23 @@
 
 This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `deepseek-r1:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
 
+### 1.5.0
+
+- **Compact Mode**: Added `/compact` toggle and `--compact` flag to hide verbose model output and show only step-by-step progress descriptions (Step 1 Thinking, Step 2 Reading file, etc.)
+- **MongoDB Session Persistence**: Conversations are now auto-saved to MongoDB after each turn (`ollama-code` database, `sessions` collection)
+  - Added `/save [name]`, `/sessions`, `/resume <id|#>`, `/delete-session` commands
+  - Added `--resume <id>` CLI flag to resume a session on startup
+  - Graceful degradation: sessions silently disabled if MongoDB is unavailable
+- **ChromaDB RAG (Retrieval-Augmented Generation)**: Semantic codebase search powered by local Ollama embeddings
+  - Added `/index` to index project files into ChromaDB
+  - Added `/search <query>` for semantic code search
+  - Added `/rag` toggle to inject relevant code context before each prompt
+  - Uses `nomic-embed-text` embedding model by default (configurable via `OLLAMA_EMBED_MODEL`)
+  - Graceful degradation: RAG silently disabled if ChromaDB is unavailable
+- New environment variables: `MONGODB_URL`, `CHROMADB_URL`, `OLLAMA_EMBED_MODEL`
+- Updated help with organized command sections (Sessions, RAG, Security, Other)
+- Version bump to 1.5.0
+
 ### 1.4.0
 
 - Added animated CLI spinner/loader that shows live activity for every async operation
