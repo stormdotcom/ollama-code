@@ -16,7 +16,7 @@ This document lists **Claude Code CLI** features (from [code.claude.com](https:/
 | `/permissions`, `/allowed-tools` | ✅ `/permissions`, `/perms` | View permission summary + settings rules |
 | `/config`, `/settings` | ✅ `/settings` | Show `.ollama-code/settings.json` rules |
 | `/keybindings` | ✅ `/shortcuts`, `/keys`, `/keybindings` | Show keyboard shortcuts (no JSON file) |
-| `/compact [instructions]` | ❌ | No conversation compaction |
+| `/compact [instructions]` | ✅ `/compact` | Toggle compact mode (hide model output, show steps only) |
 | `/copy` | ❌ | No copy-last-response / code-block picker |
 | `/cost` | ❌ | No token/cost tracking (local = no cost) |
 | `/diff` | ❌ | No interactive diff viewer |
@@ -33,8 +33,8 @@ This document lists **Claude Code CLI** features (from [code.claude.com](https:/
 | `/plan` | ❌ | No plan mode |
 | `/plugin` | ⚠️ | Repo has plugins dir; not full Claude plugin system |
 | `/release-notes` | ❌ | No in-CLI changelog |
-| `/rename [name]` | ❌ | No session naming |
-| `/resume`, `/continue` | ❌ | No session resume |
+| `/rename [name]` | ⚠️ | Use `/save [name]` to name when saving |
+| `/resume`, `/continue` | ✅ `/resume <id|#>` | Resume saved session by ID or list number |
 | `/rewind`, `/checkpoint` | ❌ | No rewind/checkpointing |
 | `/sandbox` | ❌ | No sandbox toggle (we have path + command rules) |
 | `/skills` | ❌ | No skills / custom slash commands |
