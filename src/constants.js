@@ -1,5 +1,15 @@
-/** Base URL for Ollama (override with OLLAMA_BASE_URL; we do not use any Claude/Anthropic env vars). */
-export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+/**
+ * Base URL for Ollama. We do not use any Claude/Anthropic env vars.
+ * Priority: OLLAMA_BASE_URL > OLLAMA_HOST + OLLAMA_PORT > default http://localhost:11434
+ */
+function getOllamaBaseUrl() {
+  if (process.env.OLLAMA_BASE_URL) return process.env.OLLAMA_BASE_URL.replace(/\/$/, '');
+  const host = process.env.OLLAMA_HOST || 'localhost';
+  const port = process.env.OLLAMA_PORT || '11434';
+  const protocol = process.env.OLLAMA_TLS === '1' ? 'https' : 'http';
+  return `${protocol}://${host}:${port}`;
+}
+export const OLLAMA_BASE_URL = getOllamaBaseUrl();
 export const OLLAMA_API_BASE = `${OLLAMA_BASE_URL}/v1`;
 
 /** Config directory for this CLI only; we never read or write .claude/ */

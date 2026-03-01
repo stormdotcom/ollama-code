@@ -17,7 +17,5 @@
   },
   "keywords": ["ollama", "cli", "code", "local", "ai"],
   "license": "MIT",
-  "dependencies": {
-    "chalk": "^5.3.0"
-  }
+  "dependencies": {}
 }

@@ -21,6 +21,39 @@ We never read or write `.claude/`, and we do not use any Anthropic or Claude-spe
 
 ---
 
+## Environment variables
+
+OLLAMA-CODE-CLI uses these optional environment variables to talk to Ollama:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OLLAMA_BASE_URL` | Full base URL for Ollama (host + port + protocol). Overrides host/port/tls below. | `http://localhost:11434` |
+| `OLLAMA_HOST` | Ollama server host (ignored if `OLLAMA_BASE_URL` is set). | `localhost` |
+| `OLLAMA_PORT` | Ollama server port (ignored if `OLLAMA_BASE_URL` is set). | `11434` |
+| `OLLAMA_TLS` | Set to `1` to use `https` instead of `http` (only when using `OLLAMA_HOST`/`OLLAMA_PORT`). | — |
+
+**Examples**
+
+```bash
+# Custom host and port (e.g. Ollama on another machine)
+export OLLAMA_HOST=192.168.1.10
+export OLLAMA_PORT=11434
+ollama-code
+
+# Or set the full URL
+export OLLAMA_BASE_URL=http://my-server:11434
+ollama-code
+```
+
+```powershell
+# Windows (PowerShell)
+$env:OLLAMA_HOST = "192.168.1.10"
+$env:OLLAMA_PORT = "11434"
+node bin\ollama-code.js
+```
+
+---
+
 ## Prerequisites
 
 - **Node.js 18+**
@@ -34,45 +67,89 @@ ollama pull qwen2.5-coder:7b
 
 ## Get started
 
-1. **Install from source**
+**Option A — Run locally without npm install (zero dependencies)**
 
-   ```bash
-   npm install
-   npm run build
+From the repo root (requires only Node.js 18+ and Ollama running):
+
+```bash
+node bin/ollama-code.js
+```
+
+With a specific model:
+
+```bash
+node bin/ollama-code.js --model deepseek-coder
+```
+
+To run from any directory, add the repo to your PATH or create a small wrapper script that runs `node /path/to/ollama-code/bin/ollama-code.js "$@"`.
+
+**Option B — Install with npm**
+
+```bash
+npm install
+npm run build
+npx ollama-code
+```
+
+Or install globally so the `ollama-code` command is available everywhere:
+
+```bash
+npm install -g .
+ollama-code
+```
+
+**Optional: choose a model** — Default is `qwen2.5-coder:7b`. Override with `--model` (e.g. `ollama-code --model deepseek-coder`).  
+**Version** — Run `ollama-code --version` (or `node bin/ollama-code.js --version`) to see the version and "Local-First Custom Fork" label.
+
+---
+
+## Install on Windows
+
+1. **Install Node.js 18+**  
+   Download from [nodejs.org](https://nodejs.org) or use Winget: `winget install OpenJS.NodeJS.LTS`
+
+2. **Install and run Ollama**  
+   Download from [ollama.com](https://ollama.com) or: `winget install Ollama.Ollama`. Start Ollama (it may run in the background). Pull a model: `ollama pull qwen2.5-coder:7b`
+
+3. **Get the CLI**  
+   Clone or download this repo, then open PowerShell or Command Prompt in the repo folder.
+
+4. **Run without npm install** (no dependencies):
+
+   ```powershell
+   node bin\ollama-code.js
    ```
 
-2. **Run the CLI**
+   With a model:
 
-   From your project directory:
-
-   ```bash
-   npx ollama-code
+   ```powershell
+   node bin\ollama-code.js --model deepseek-coder
    ```
 
-   Or after linking/installing globally:
+5. **Optional: install globally so `ollama-code` works from any folder**
 
-   ```bash
+   ```powershell
+   npm install -g .
    ollama-code
    ```
 
-3. **Optional: choose a model**
+   (Requires npm; run from the repo folder.)
 
-   Default model is `qwen2.5-coder:7b`. Override with `--model`:
+6. **Optional: run from any directory without global install**  
+   Add the repo’s full path to your user PATH, then run:
 
-   ```bash
-   ollama-code --model deepseek-coder
-   ollama-code --model llama3.1
+   ```powershell
+   node "C:\path\to\ollama-code\bin\ollama-code.js" %*
    ```
 
-   Use any model you have pulled in Ollama (e.g. `qwen2.5-coder:7b`, `deepseek-v3`, `llama3.1`).
+   Or create a batch file (e.g. `ollama-code.cmd`) somewhere on your PATH:
 
-4. **Version**
-
-   ```bash
-   ollama-code --version
+   ```batch
+   @echo off
+   node "C:\path\to\ollama-code\bin\ollama-code.js" %*
    ```
 
-   Shows the CLI version and identifies this as a **Local-First Custom Fork**.
+   Replace `C:\path\to\ollama-code` with the actual path to this repo.
 
 ## Plugins
 
