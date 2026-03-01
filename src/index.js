@@ -1,7 +1,7 @@
 import { createInterface } from 'readline';
 import { cwd } from 'process';
 import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js';
-import { printSplash, printVersion, printHelp, printTools, style, c } from './splash.js';
+import { printSplash, printVersion, printHelp, printTools, printShortcuts, style, c } from './splash.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
@@ -107,9 +107,36 @@ export async function runCli(argv) {
   }
   console.log('');
 
+  // ── Shortcuts info ──────────────────────────────────────────────────
+  console.log(`  ${c.gray}Shortcuts: Ctrl+C interrupt, Ctrl+D exit, Ctrl+L clear screen${c.reset}`);
+  console.log(`  ${c.gray}Type /shortcuts for all keyboard shortcuts${c.reset}`);
+  console.log('');
+
   // ── REPL ──────────────────────────────────────────────────────────────
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const ask = (prompt) => new Promise((resolve) => rl.question(prompt, resolve));
+
+  // Ctrl+D to exit cleanly
+  rl.on('close', () => {
+    console.log(style.info('\nGoodbye.'));
+    process.exit(0);
+  });
+
+  // Ctrl+C at idle prompt — show hint instead of killing the process
+  rl.on('SIGINT', () => {
+    console.log(`\n${c.gray}  (Press Ctrl+D or type /exit to quit)${c.reset}`);
+    rl.prompt();
+  });
+
+  // Ctrl+L to clear screen
+  if (process.stdin.isTTY) {
+    process.stdin.on('keypress', (_ch, key) => {
+      if (key && key.ctrl && key.name === 'l') {
+        process.stdout.write('\x1b[2J\x1b[H');
+        rl.prompt();
+      }
+    });
+  }
 
   while (true) {
     const userInput = await ask(style.prompt());
@@ -132,6 +159,10 @@ export async function runCli(argv) {
 
         case '/tools':
           printTools();
+          continue;
+
+        case '/shortcuts': case '/keys': case '/keybindings':
+          printShortcuts();
           continue;
 
         case '/clear':
@@ -254,17 +285,44 @@ export async function runCli(argv) {
       process.stdout.write(`\n${style.modelLabel(currentModel)} `);
 
       let turnContent = '';
+      let interrupted = false;
+      const abortController = new AbortController();
+
+      const interruptHandler = () => {
+        interrupted = true;
+        abortController.abort();
+        process.stdout.write(`\n${c.yellow}  ⏹ Generation interrupted (Ctrl+C)${c.reset}\n`);
+      };
+      process.once('SIGINT', interruptHandler);
+
       const onToken = (token) => {
         process.stdout.write(c.magenta + token + c.reset);
       };
 
       try {
-        turnContent = await streamChat(currentModel, messages, onToken);
+        turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
       } catch (err) {
+        if (interrupted) {
+          process.removeListener('SIGINT', interruptHandler);
+          if (turnContent) {
+            messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
+          }
+          break;
+        }
         console.log('\n' + style.error('Error: ' + (err.message || err)));
         messages.pop();
+        process.removeListener('SIGINT', interruptHandler);
         break;
       }
+      process.removeListener('SIGINT', interruptHandler);
+
+      if (interrupted) {
+        if (turnContent) {
+          messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
+        }
+        break;
+      }
+
       console.log(c.reset);
       messages.push({ role: 'assistant', content: turnContent });
 

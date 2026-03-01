@@ -68,6 +68,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/deny <rule>${c.reset}    Add deny rule`);
   console.log(`  ${c.yellow}/revoke <rule>${c.reset}  Remove a rule`);
   console.log(`  ${c.yellow}/clear${c.reset}          Clear conversation history`);
+  console.log(`  ${c.yellow}/shortcuts${c.reset}      Show keyboard shortcuts`);
   console.log(`  ${c.yellow}/exit${c.reset}           Quit (also: /quit, /q, exit, quit, q)`);
   console.log('');
   console.log(`  ${c.magenta}${c.bold}Tools${c.reset}  (model uses XML tags automatically)`);
@@ -88,6 +89,36 @@ export function printTools() {
   console.log(`  ${c.cyan}execute_command${c.reset}  Shell command ${c.red}(confirm first)${c.reset}`);
   console.log(`  ${c.cyan}search_code${c.reset}      Grep-like code search`);
   console.log(`  ${c.cyan}scan_secrets${c.reset}     Scan for hardcoded secrets`);
+  console.log('');
+}
+
+export function printShortcuts() {
+  console.log('');
+  console.log(`  ${c.magenta}${c.bold}Keyboard Shortcuts${c.reset}`);
+  console.log('');
+  console.log(`  ${c.cyan}${c.bold}Core${c.reset}`);
+  console.log(`  ${c.yellow}Enter${c.reset}             Send message`);
+  console.log(`  ${c.yellow}Ctrl+C${c.reset}            Cancel current generation / interrupt`);
+  console.log(`  ${c.yellow}Ctrl+D${c.reset}            Exit the CLI`);
+  console.log(`  ${c.yellow}Ctrl+L${c.reset}            Clear terminal screen`);
+  console.log('');
+  console.log(`  ${c.cyan}${c.bold}Input editing${c.reset}`);
+  console.log(`  ${c.yellow}Ctrl+A${c.reset}            Move cursor to start of line`);
+  console.log(`  ${c.yellow}Ctrl+E${c.reset}            Move cursor to end of line`);
+  console.log(`  ${c.yellow}Ctrl+U${c.reset}            Delete from cursor to start of line`);
+  console.log(`  ${c.yellow}Ctrl+K${c.reset}            Delete from cursor to end of line`);
+  console.log(`  ${c.yellow}Ctrl+W${c.reset}            Delete previous word`);
+  console.log(`  ${c.yellow}Ctrl+B${c.reset} / ${c.yellow}Left${c.reset}     Move cursor left`);
+  console.log(`  ${c.yellow}Ctrl+F${c.reset} / ${c.yellow}Right${c.reset}    Move cursor right`);
+  console.log('');
+  console.log(`  ${c.cyan}${c.bold}History${c.reset}`);
+  console.log(`  ${c.yellow}Up${c.reset}                Previous input`);
+  console.log(`  ${c.yellow}Down${c.reset}              Next input`);
+  console.log(`  ${c.yellow}Ctrl+R${c.reset}            Search command history (terminal)`);
+  console.log('');
+  console.log(`  ${c.cyan}${c.bold}Quick commands${c.reset}`);
+  console.log(`  ${c.yellow}Ctrl+D${c.reset}            Exit (same as /exit)`);
+  console.log(`  ${c.gray}Type /help for slash commands${c.reset}`);
   console.log('');
 }
 

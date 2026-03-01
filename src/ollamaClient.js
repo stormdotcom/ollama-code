@@ -6,9 +6,10 @@ import { OLLAMA_API_BASE, NUM_CTX } from './constants.js';
  * @param {string} model
  * @param {Array<{ role: string, content: string }>} messages
  * @param {function(string): void} onToken
+ * @param {{ signal?: AbortSignal }} [options]
  * @returns {Promise<string>} Full content
  */
-export async function streamChat(model, messages, onToken) {
+export async function streamChat(model, messages, onToken, options = {}) {
   const res = await fetch(`${OLLAMA_API_BASE}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -19,6 +20,7 @@ export async function streamChat(model, messages, onToken) {
       max_tokens: 8192,
       num_ctx: NUM_CTX,
     }),
+    signal: options.signal,
   });
 
   if (!res.ok) {

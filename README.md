@@ -257,9 +257,52 @@ Inside the CLI, use these slash commands:
 | `/model <name>` | Switch model mid-session (clears history) |
 | `/models` | List all models pulled in Ollama |
 | `/tools` | List available tools |
+| `/shortcuts` | Show keyboard shortcuts (also `/keys`, `/keybindings`) |
 | `/scan <file>` | Scan a file for hardcoded secrets |
+| `/permissions` | Show current permission levels |
+| `/settings` | Show `.ollama-code/settings.json` rules |
+| `/allow <rule>` | Add an allow rule (e.g. `/allow Bash(git:*)`) |
+| `/deny <rule>` | Add a deny rule |
+| `/revoke <rule>` | Remove a rule |
 | `/clear` | Clear conversation history |
 | `/exit` | Quit (also `/quit`, `/q`, `exit`, `quit`, `q`) |
+
+---
+
+## Keyboard shortcuts
+
+These shortcuts work inside the OLLAMA-CODE-CLI prompt, similar to Claude Code:
+
+### Core
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send message |
+| `Ctrl+C` | Interrupt / cancel current generation |
+| `Ctrl+D` | Exit the CLI |
+| `Ctrl+L` | Clear terminal screen |
+
+### Input editing
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+A` | Move cursor to start of line |
+| `Ctrl+E` | Move cursor to end of line |
+| `Ctrl+U` | Delete from cursor to start of line |
+| `Ctrl+K` | Delete from cursor to end of line |
+| `Ctrl+W` | Delete previous word |
+| `Ctrl+B` / `Left` | Move cursor left |
+| `Ctrl+F` / `Right` | Move cursor right |
+
+### History
+
+| Shortcut | Action |
+|----------|--------|
+| `Up` | Previous input |
+| `Down` | Next input |
+| `Ctrl+R` | Search command history (terminal-level) |
+
+> **Tip:** Type `/shortcuts` inside the CLI to see all shortcuts at any time.
 
 ---
 
