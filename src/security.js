@@ -1,26 +1,33 @@
 import { c } from './splash.js';
 import { createInterface } from 'readline';
 import { resolve } from 'path';
+import { checkSettingsPermission, addAllowRule } from './settings.js';
 
-// ── Permission levels ───────────────────────────────────────────────────────
-// READ inside cwd   = auto-allowed
-// READ outside cwd  = prompt user
-// WRITE inside cwd  = auto-allowed
-// WRITE outside cwd = prompt user
-// EXECUTE           = prompt user (or auto if user chose "always")
-// SEARCH            = auto-allowed (inside cwd)
-
+// ── Session state ───────────────────────────────────────────────────────────
 const approvedPaths = new Set();
 let autoApproveCommands = false;
 
+// ── File permissions ────────────────────────────────────────────────────────
+
 /**
- * Check file access. Returns { allowed: true } or { allowed: false, reason }.
- * For paths outside cwd, prompts the user.
- * @param {'read'|'write'} action
+ * Check file access permission.
+ * 1. Settings allow/deny rules checked first
+ * 2. Inside workspace = auto-allowed
+ * 3. Outside workspace = prompt user
  */
 export async function checkFilePermission(filePath, cwd, action = 'read') {
   const normalizedPath = resolve(filePath.replace(/\\/g, '/'));
   const normalizedCwd = resolve(cwd.replace(/\\/g, '/'));
+
+  // Settings deny rules first
+  const tool = action === 'read' ? 'Read' : 'Write';
+  const settingsResult = checkSettingsPermission(tool, filePath);
+  if (settingsResult === 'deny') {
+    return { allowed: false, reason: `Denied by settings rule for ${tool}` };
+  }
+  if (settingsResult === 'allow') {
+    return { allowed: true };
+  }
 
   // Inside workspace = auto-allowed
   if (normalizedPath.toLowerCase().startsWith(normalizedCwd.toLowerCase())) {
@@ -32,13 +39,13 @@ export async function checkFilePermission(filePath, cwd, action = 'read') {
     return { allowed: true };
   }
 
-  // Paths with .. = always deny (traversal attack)
+  // Path traversal = always deny
   if (filePath.includes('..')) {
     return { allowed: false, reason: 'Path traversal (..) is blocked for security.' };
   }
 
   // Outside workspace: prompt user
-  const { approved } = await confirmPath(filePath, action);
+  const { approved } = await confirmPath(filePath, action, cwd);
   if (approved) {
     approvedPaths.add(normalizedPath.toLowerCase());
     return { allowed: true };
@@ -46,10 +53,7 @@ export async function checkFilePermission(filePath, cwd, action = 'read') {
   return { allowed: false, reason: `User denied ${action} access to: ${filePath}` };
 }
 
-/**
- * Prompt user to approve a file path outside the workspace.
- */
-async function confirmPath(filePath, action) {
+async function confirmPath(filePath, action, cwd) {
   console.log('');
   console.log(`${c.yellow}${c.bold}  ⚠  ${action.toUpperCase()} outside workspace${c.reset}`);
   console.log(`${c.gray}  ──────────────────────────────────${c.reset}`);
@@ -65,7 +69,7 @@ async function confirmPath(filePath, action) {
   return { approved: trimmed === 'y' || trimmed === 'yes' };
 }
 
-// ── Blocked commands ────────────────────────────────────────────────────────
+// ── Command permissions ─────────────────────────────────────────────────────
 
 const BLOCKED_PATTERNS = [
   /\brm\s+(-\w+\s+)*\//i,
@@ -108,9 +112,41 @@ export function isCommandBlocked(command) {
 }
 
 /**
- * Prompt user to approve a shell command. Returns { approved, always }.
+ * Check if command is auto-allowed by settings, auto-approve, or needs prompt.
+ * Returns { approved: boolean, always?: boolean, source?: string }
  */
-export async function confirmCommand(command) {
+export async function checkCommandPermission(command, cwd) {
+  // Always-blocked patterns
+  const blocked = isCommandBlocked(command);
+  if (blocked) {
+    console.log(`  ${c.red}${c.bold}BLOCKED${c.reset} ${c.gray}${command}${c.reset}`);
+    return { approved: false, source: 'blocked' };
+  }
+
+  // Settings deny rules
+  const settingsResult = checkSettingsPermission('Bash', command);
+  if (settingsResult === 'deny') {
+    console.log(`  ${c.red}${c.bold}DENIED by settings${c.reset} ${c.gray}${command}${c.reset}`);
+    return { approved: false, source: 'settings-deny' };
+  }
+
+  // Settings allow rules
+  if (settingsResult === 'allow') {
+    console.log(`  ${c.green}auto-allowed (settings):${c.reset} ${c.white}${command}${c.reset}`);
+    return { approved: true, source: 'settings-allow' };
+  }
+
+  // Session-level auto-approve
+  if (autoApproveCommands) {
+    console.log(`  ${c.yellow}auto-approved (session):${c.reset} ${c.white}${command}${c.reset}`);
+    return { approved: true, source: 'session-always' };
+  }
+
+  // Prompt user
+  return await confirmCommand(command, cwd);
+}
+
+async function confirmCommand(command, cwd) {
   console.log('');
   console.log(`${c.yellow}${c.bold}  ⚠  Command approval required${c.reset}`);
   console.log(`${c.gray}  ──────────────────────────────────${c.reset}`);
@@ -119,15 +155,30 @@ export async function confirmCommand(command) {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) =>
-    rl.question(`  ${c.yellow}Allow? ${c.green}[y]es${c.reset} / ${c.red}[n]o${c.reset} / ${c.cyan}[a]lways${c.reset}: `, resolve)
+    rl.question(`  ${c.yellow}Allow? ${c.green}[y]es${c.reset} / ${c.red}[n]o${c.reset} / ${c.cyan}[a]lways (session)${c.reset} / ${c.magenta}[s]ave rule${c.reset}: `, resolve)
   );
   rl.close();
   const trimmed = (answer || '').trim().toLowerCase();
-  return {
-    approved: trimmed === 'y' || trimmed === 'yes' || trimmed === 'a' || trimmed === 'always',
-    always: trimmed === 'a' || trimmed === 'always',
-  };
+
+  if (trimmed === 's' || trimmed === 'save') {
+    // Auto-detect the prefix and save as Bash(prefix:*)
+    const prefix = command.split(/\s+/)[0];
+    const rule = `Bash(${prefix}:*)`;
+    addAllowRule(cwd, rule);
+    console.log(style_success(`  Saved rule: ${rule}`));
+    return { approved: true, source: 'saved-rule' };
+  }
+
+  if (trimmed === 'a' || trimmed === 'always') {
+    autoApproveCommands = true;
+    return { approved: true, always: true, source: 'session-always' };
+  }
+
+  const approved = trimmed === 'y' || trimmed === 'yes';
+  return { approved, source: approved ? 'user-yes' : 'user-no' };
 }
+
+function style_success(text) { return `${c.green}${text}${c.reset}`; }
 
 export function getAutoApproveCommands() { return autoApproveCommands; }
 export function setAutoApproveCommands(val) { autoApproveCommands = val; }

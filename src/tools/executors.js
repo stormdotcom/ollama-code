@@ -3,9 +3,8 @@ import { spawn } from 'child_process';
 import { join, dirname, resolve, isAbsolute } from 'path';
 import { parseWriteFileContent } from './xmlParser.js';
 import {
-  checkFilePermission, isCommandBlocked, confirmCommand,
+  checkFilePermission, checkCommandPermission,
   scanForSecrets, printScanResults,
-  getAutoApproveCommands, setAutoApproveCommands,
 } from '../security.js';
 import { c } from '../splash.js';
 
@@ -80,18 +79,8 @@ export async function executeToolCall(cwd, { tag, innerText }) {
       case 'execute_command': {
         const cmd = innerText.trim();
         if (!cmd) return '[execute_command] error: no command provided';
-        const blocked = isCommandBlocked(cmd);
-        if (blocked) {
-          console.log(`  ${c.red}${c.bold}BLOCKED${c.reset} ${c.gray}${cmd}${c.reset}`);
-          return `[execute_command] BLOCKED: dangerous command denied.`;
-        }
-        if (!getAutoApproveCommands()) {
-          const { approved, always } = await confirmCommand(cmd);
-          if (!approved) return '[execute_command] denied by user';
-          if (always) setAutoApproveCommands(true);
-        } else {
-          console.log(`  ${c.yellow}auto-approved:${c.reset} ${c.white}${cmd}${c.reset}`);
-        }
+        const perm = await checkCommandPermission(cmd, cwd);
+        if (!perm.approved) return `[execute_command] denied: ${perm.source || 'user'}`;
         const result = await runCommand(cwd, cmd);
         const out = [];
         if (result.stdout) out.push(result.stdout);

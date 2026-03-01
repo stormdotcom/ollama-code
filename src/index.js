@@ -8,6 +8,7 @@ import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
 import { scanForSecrets, printScanResults } from './security.js';
+import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings } from './settings.js';
 import { scanProjectTree } from './projectScanner.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -63,8 +64,15 @@ export async function runCli(argv) {
   // ── Splash ────────────────────────────────────────────────────────────
   printSplash(currentModel, version);
 
-  // ── Project scan ──────────────────────────────────────────────────────
+  // ── Load settings ───────────────────────────────────────────────────
   const workDir = cwd();
+  const settings = loadSettings(workDir);
+  const allowRules = settings.permissions?.allow || [];
+  if (allowRules.length > 0) {
+    console.log(`  ${c.cyan}Settings:${c.reset} ${c.green}${allowRules.length} allow rule(s)${c.reset} loaded from .ollama-code/settings.json`);
+  }
+
+  // ── Project scan ──────────────────────────────────────────────────────
   console.log(style.info('  Scanning project files...'));
   const fileTree = scanProjectTree(workDir);
   const fileCount = fileTree.split('\n').filter(l => l.trim()).length;
