@@ -35,6 +35,7 @@ This document lists **Claude Code CLI** features (from [code.claude.com](https:/
 | `/release-notes` | ❌ | No in-CLI changelog |
 | `/rename [name]` | ⚠️ | Use `/save [name]` to name when saving |
 | `/resume`, `/continue` | ✅ `/resume <id|#>` | Resume saved session by ID or list number |
+| Pause | Implicit | ✅ `/pause [name]` – save session and hint to resume later |
 | `/rewind`, `/checkpoint` | ❌ | No rewind/checkpointing |
 | `/sandbox` | ❌ | No sandbox toggle (we have path + command rules) |
 | `/skills` | ❌ | No skills / custom slash commands |
@@ -138,14 +139,14 @@ We do **not** have: MCP tools, TaskOutput for background jobs, or separate “al
 | Keybindings | `~/.claude/keybindings.json` | Not used; shortcuts are fixed |
 | Skills | `.claude/skills/`, `~/.claude/skills/` | Not implemented |
 | Memory | `CLAUDE.md`, auto-memory | Not implemented |
-| Session resume | Stored sessions | Not implemented |
+| Session resume | Stored sessions | ✅ MongoDB; `/save`, `/sessions`, `/resume`, `/session` |
 
 ---
 
 ## Summary
 
-- **Implemented in OLLAMA-CODE-CLI:** Core REPL, `/help`, `/clear`, `/exit`, `/model`, `/models` (with number selection), `/permissions`, `/settings`, `/shortcuts`, `/allow`, `/deny`, `/revoke`, `/scan`, `/unleash`; file and command tools with approval; blocked commands; path sandbox; streaming; model label; code-block formatting; number choices for models and approval prompts.
-- **Different:** XML tool tags instead of JSON; no cloud/account; no MCP/skills/plugins; no rewind, fork, or session resume.
-- **Not implemented:** Bundled skills (`/debug`, `/batch`, `/simplify`), vim mode, theme picker, keybindings file, memory/CLAUDE.md, background tasks, diff viewer, copy/last-response, plan mode, and other Claude-only or cloud-dependent features.
+- **Implemented in OLLAMA-CODE-CLI:** Core REPL, `/help`, `/clear`, `/exit`, `/model`, `/models` (with number selection), `/permissions`, `/settings`, `/shortcuts`, `/allow`, `/deny`, `/revoke`, `/scan`, `/unleash`, `/compact`; **sessions** (`/session`, `/save`, `/pause`, `/sessions`, `/resume`, `/delete-session`); **RAG** (`/index`, `/search`, `/rag`); **LAN web UI** (`--serve`); file and command tools with approval; blocked commands; path sandbox; streaming; model label; code-block formatting; number choices; input queuing; duplicate command prevention; command timeout.
+- **Different:** XML tool tags instead of JSON; no cloud/account; no MCP/skills/plugins; no rewind or fork.
+- **Not implemented:** Bundled skills (`/debug`, `/batch`, `/simplify`), vim mode, theme picker, keybindings file, memory/CLAUDE.md, background tasks, diff viewer, copy/last-response, plan mode.
 
 For full OLLAMA-CODE-CLI usage, see the main [README](../README.md).

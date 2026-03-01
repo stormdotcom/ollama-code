@@ -494,7 +494,7 @@ export async function runCli(argv) {
           }
           continue;
 
-        case '/save': {
+        case '/pause': case '/save': {
           if (!isMongoConnected()) {
             console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
             continue;
@@ -503,6 +503,9 @@ export async function runCli(argv) {
           spinnerStart('Saving session...', c.cyan);
           await saveSession(sessionId, { name, model: currentModel, messages, metadata: { cwd: workDir, unleashed: isUnleashedMode(), fileCount } });
           spinnerStop(`${c.green}✓${c.reset} Session saved ${name ? `as "${name}"` : `(${sessionId.slice(0, 8)})`}`);
+          if (cmd.toLowerCase() === '/pause') {
+            console.log(`  ${c.gray}Paused. Use /resume <id> or ollama-code --resume ${sessionId} to continue.${c.reset}`);
+          }
           continue;
         }
 

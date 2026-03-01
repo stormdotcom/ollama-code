@@ -69,6 +69,7 @@ export function printHelp() {
   console.log(`  ${c.magenta}${c.bold}Sessions (MongoDB)${c.reset}`);
   console.log(`  ${c.yellow}/session${c.reset}          Show current session ID (for LAN web view)`);
   console.log(`  ${c.yellow}/save [name]${c.reset}       Save current session`);
+  console.log(`  ${c.yellow}/pause [name]${c.reset}      Save and pause (resume later with /resume)`);
   console.log(`  ${c.yellow}/sessions${c.reset}          List saved sessions`);
   console.log(`  ${c.yellow}/resume <id|#>${c.reset}    Resume a saved session`);
   console.log(`  ${c.yellow}/delete-session${c.reset}    Delete a saved session`);
