@@ -62,6 +62,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/model <name>${c.reset}   Switch model mid-session`);
   console.log(`  ${c.yellow}/models${c.reset}         List models available in Ollama`);
   console.log(`  ${c.yellow}/tools${c.reset}          List available tools`);
+  console.log(`  ${c.yellow}/permissions${c.reset}     Show current permission levels`);
   console.log(`  ${c.yellow}/clear${c.reset}          Clear conversation history`);
   console.log(`  ${c.yellow}/exit${c.reset}           Quit (also: /quit, /q, exit, quit, q)`);
   console.log('');

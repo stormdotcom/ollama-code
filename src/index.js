@@ -4,10 +4,11 @@ import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js
 import { printSplash, printVersion, printHelp, printTools, style, c } from './splash.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
-import { SYSTEM_PROMPT, DEFAULT_MODEL } from './constants.js';
+import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
 import { scanForSecrets, printScanResults } from './security.js';
+import { scanProjectTree } from './projectScanner.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -62,19 +63,35 @@ export async function runCli(argv) {
   // ── Splash ────────────────────────────────────────────────────────────
   printSplash(currentModel, version);
 
+  // ── Project scan ──────────────────────────────────────────────────────
+  const workDir = cwd();
+  console.log(style.info('  Scanning project files...'));
+  const fileTree = scanProjectTree(workDir);
+  const fileCount = fileTree.split('\n').filter(l => l.trim()).length;
+  console.log(style.success(`  Found ${fileCount} file(s). Model has full project context.\n`));
+
   // ── Git context ───────────────────────────────────────────────────────
   const gitContext = await getGitContext();
-  const gitPrompt = formatGitContextForPrompt(gitContext);
+  const gitInfo = formatGitContextForPrompt(gitContext);
 
-  // ── Conversation ──────────────────────────────────────────────────────
+  // ── Build system prompt ───────────────────────────────────────────────
+  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo });
+
   let messages = [];
   function resetMessages() {
-    const systemContent = gitPrompt
-      ? `${SYSTEM_PROMPT}\n\nCurrent workspace:\n${gitPrompt}`
-      : SYSTEM_PROMPT;
-    messages = [{ role: 'system', content: systemContent }];
+    messages = [{ role: 'system', content: systemPrompt }];
   }
   resetMessages();
+
+  // ── Permission summary ────────────────────────────────────────────────
+  console.log(`  ${c.cyan}Permissions:${c.reset}`);
+  console.log(`    ${c.green}✓${c.reset} Read files in workspace     ${c.green}auto-allowed${c.reset}`);
+  console.log(`    ${c.green}✓${c.reset} Write files in workspace    ${c.green}auto-allowed${c.reset}`);
+  console.log(`    ${c.green}✓${c.reset} Search code in workspace    ${c.green}auto-allowed${c.reset}`);
+  console.log(`    ${c.yellow}?${c.reset} Read/write outside workspace ${c.yellow}prompts you${c.reset}`);
+  console.log(`    ${c.yellow}?${c.reset} Execute shell commands       ${c.yellow}prompts you${c.reset}`);
+  console.log(`    ${c.red}✗${c.reset} Dangerous commands           ${c.red}always blocked${c.reset}`);
+  console.log('');
 
   // ── REPL ──────────────────────────────────────────────────────────────
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -138,7 +155,7 @@ export async function runCli(argv) {
 
         case '/scan': {
           const scanPath = cmdArg || '.';
-          const fullPath = resolve(cwd(), scanPath);
+          const fullPath = resolve(workDir, scanPath);
           if (!existsSync(fullPath)) {
             console.log(style.error(`  File not found: ${scanPath}`));
           } else {
@@ -149,13 +166,25 @@ export async function runCli(argv) {
           continue;
         }
 
+        case '/permissions': case '/perms':
+          console.log('');
+          console.log(`  ${c.magenta}${c.bold}Current Permissions${c.reset}`);
+          console.log(`    ${c.green}✓${c.reset} Read workspace files      ${c.green}auto${c.reset}`);
+          console.log(`    ${c.green}✓${c.reset} Write workspace files     ${c.green}auto${c.reset}`);
+          console.log(`    ${c.green}✓${c.reset} Search workspace          ${c.green}auto${c.reset}`);
+          console.log(`    ${c.yellow}?${c.reset} Outside workspace         ${c.yellow}prompt${c.reset}`);
+          console.log(`    ${c.yellow}?${c.reset} Shell commands             ${c.yellow}prompt${c.reset}`);
+          console.log(`    ${c.red}✗${c.reset} Dangerous commands         ${c.red}blocked${c.reset}`);
+          console.log(`  ${c.gray}Workspace: ${workDir}${c.reset}`);
+          console.log('');
+          continue;
+
         default:
           console.log(style.warn(`  Unknown command: ${cmd}. Type /help for commands.`));
           continue;
       }
     }
 
-    // Exit keywords
     if (/^(exit|quit|q)$/i.test(trimmed)) {
       rl.close();
       console.log(style.info('Goodbye.'));
@@ -169,7 +198,6 @@ export async function runCli(argv) {
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
 
-      // Show thinking indicator
       process.stdout.write(`\n${style.modelLabel(currentModel)} `);
 
       let turnContent = '';
@@ -187,7 +215,6 @@ export async function runCli(argv) {
       console.log(c.reset);
       messages.push({ role: 'assistant', content: turnContent });
 
-      // ── Parse and execute tools ─────────────────────────────────
       const toolCalls = parseToolCalls(turnContent);
       if (toolCalls.length === 0) break;
 
@@ -196,7 +223,7 @@ export async function runCli(argv) {
       const results = [];
       for (const call of toolCalls) {
         console.log(style.tool(call.tag, c.gray + (call.innerText.split('\n')[0] || '').slice(0, 80) + c.reset));
-        const result = await executeToolCall(cwd(), call);
+        const result = await executeToolCall(workDir, call);
         console.log(style.toolResult('  ' + result.split('\n')[0]));
         if (result.split('\n').length > 1) {
           const extra = result.split('\n').slice(1).join('\n');
@@ -210,8 +237,6 @@ export async function runCli(argv) {
         role: 'user',
         content: `[Tool results]\n${results.join('\n---\n')}`,
       });
-
-      // Loop: model gets tool results and may call more tools
     }
 
     if (iteration >= MAX_TOOL_ITERATIONS) {

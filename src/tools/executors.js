@@ -2,10 +2,12 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 
 import { spawn } from 'child_process';
 import { join, dirname, resolve, isAbsolute } from 'path';
 import { parseWriteFileContent } from './xmlParser.js';
-import { isPathSafe, isCommandBlocked, confirmCommand, scanForSecrets, printScanResults } from '../security.js';
+import {
+  checkFilePermission, isCommandBlocked, confirmCommand,
+  scanForSecrets, printScanResults,
+  getAutoApproveCommands, setAutoApproveCommands,
+} from '../security.js';
 import { c } from '../splash.js';
-
-let autoApproveCommands = false;
 
 function resolvePath(cwd, filePath) {
   const p = filePath.replace(/\\/g, '/');
@@ -14,7 +16,7 @@ function resolvePath(cwd, filePath) {
 }
 
 /**
- * Execute a single tool call with security checks. Returns result string for the model.
+ * Execute a single tool call with permission checks.
  */
 export async function executeToolCall(cwd, { tag, innerText }) {
   try {
@@ -23,7 +25,8 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         const filePath = innerText.trim().split(/\s+/)[0] || innerText.trim();
         if (!filePath) return '[read_file] error: no path provided';
         const fullPath = resolvePath(cwd, filePath);
-        if (!isPathSafe(filePath, cwd)) return `[read_file] BLOCKED: path escapes workspace (${filePath})`;
+        const perm = await checkFilePermission(fullPath, cwd, 'read');
+        if (!perm.allowed) return `[read_file] DENIED: ${perm.reason}`;
         if (!existsSync(fullPath)) return `[read_file] error: file not found: ${filePath}`;
         const content = readFileSync(fullPath, 'utf8');
         return `[read_file] ${filePath} (${content.split('\n').length} lines):\n${content}`;
@@ -32,12 +35,12 @@ export async function executeToolCall(cwd, { tag, innerText }) {
       case 'write_file': {
         const { path: filePath, content } = parseWriteFileContent(innerText);
         if (!filePath) return '[write_file] error: no path provided';
-        if (!isPathSafe(filePath, cwd)) return `[write_file] BLOCKED: path escapes workspace (${filePath})`;
         const fullPath = resolvePath(cwd, filePath);
+        const perm = await checkFilePermission(fullPath, cwd, 'write');
+        if (!perm.allowed) return `[write_file] DENIED: ${perm.reason}`;
         const dir = dirname(fullPath);
         if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
         writeFileSync(fullPath, content || '', 'utf8');
-        // Auto-scan new files for secrets
         const secrets = scanForSecrets(content || '', filePath);
         let result = `[write_file] wrote ${filePath}`;
         if (secrets.length > 0) {
@@ -51,8 +54,9 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         const lines = innerText.split('\n');
         const filePath = (lines[0] || '').trim();
         if (!filePath) return '[edit_file] error: no path provided';
-        if (!isPathSafe(filePath, cwd)) return `[edit_file] BLOCKED: path escapes workspace (${filePath})`;
         const fullPath = resolvePath(cwd, filePath);
+        const perm = await checkFilePermission(fullPath, cwd, 'write');
+        if (!perm.allowed) return `[edit_file] DENIED: ${perm.reason}`;
         if (!existsSync(fullPath)) return `[edit_file] error: file not found: ${filePath}`;
         let content = readFileSync(fullPath, 'utf8');
         const rest = lines.slice(1).join('\n');
@@ -76,24 +80,18 @@ export async function executeToolCall(cwd, { tag, innerText }) {
       case 'execute_command': {
         const cmd = innerText.trim();
         if (!cmd) return '[execute_command] error: no command provided';
-
-        // Security: check blocked patterns
         const blocked = isCommandBlocked(cmd);
         if (blocked) {
           console.log(`  ${c.red}${c.bold}BLOCKED${c.reset} ${c.gray}${cmd}${c.reset}`);
-          console.log(`  ${c.red}Matched blocked pattern: ${blocked}${c.reset}`);
-          return `[execute_command] BLOCKED: command matches a dangerous pattern and was denied.`;
+          return `[execute_command] BLOCKED: dangerous command denied.`;
         }
-
-        // Security: require user confirmation
-        if (!autoApproveCommands) {
+        if (!getAutoApproveCommands()) {
           const { approved, always } = await confirmCommand(cmd);
           if (!approved) return '[execute_command] denied by user';
-          if (always) autoApproveCommands = true;
+          if (always) setAutoApproveCommands(true);
         } else {
           console.log(`  ${c.yellow}auto-approved:${c.reset} ${c.white}${cmd}${c.reset}`);
         }
-
         const result = await runCommand(cwd, cmd);
         const out = [];
         if (result.stdout) out.push(result.stdout);
