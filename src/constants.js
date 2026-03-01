@@ -93,6 +93,13 @@ Search files for a pattern:
 Scan a file for hardcoded secrets:
 <scan_secrets>path/to/file.js</scan_secrets>
 
+## WRITE TO CODEBASE — DO NOT OUTPUT CODE BLOCKS
+
+- Do NOT respond with markdown code blocks (e.g. \`\`\`js ... \`\`\`) for the user to copy into files.
+- Always write or edit code directly in the repository using <write_file> and <edit_file>.
+- When the user asks for new code, a fix, or a refactor: use the tools to create or update the actual files. Do not paste code in your message as the primary response.
+- You may include a very short snippet in chat only when explaining a concept that does not need to be written to a file. For any code that should live in the project, use the tools.
+
 ## RULES
 - Use relative paths from the workspace root. Do NOT use absolute paths unless needed.
 - One tool tag per action. You can use multiple tags in one response.

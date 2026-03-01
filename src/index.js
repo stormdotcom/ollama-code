@@ -11,6 +11,7 @@ import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, 
 import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings } from './settings.js';
 import { scanProjectTree } from './projectScanner.js';
 import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool } from './spinner.js';
+import { createStreamFormatter } from './outputFormatter.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -368,6 +369,8 @@ export async function runCli(argv) {
       let interrupted = false;
       let firstToken = true;
       const abortController = new AbortController();
+      const writeOut = (s) => process.stdout.write(s);
+      const formatter = createStreamFormatter(writeOut);
 
       spinnerStart('Thinking...', c.magenta);
 
@@ -382,10 +385,10 @@ export async function runCli(argv) {
       const onToken = (token) => {
         if (firstToken) {
           spinnerStop();
-          process.stdout.write(`\n${style.modelLabel(currentModel)} `);
+          process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
           firstToken = false;
         }
-        process.stdout.write(c.magenta + token + c.reset);
+        formatter.push(token);
       };
 
       try {
@@ -413,7 +416,8 @@ export async function runCli(argv) {
         break;
       }
 
-      console.log(c.reset);
+      formatter.flush();
+      process.stdout.write(c.reset + '\n');
       messages.push({ role: 'assistant', content: turnContent });
 
       const toolCalls = parseToolCalls(turnContent);

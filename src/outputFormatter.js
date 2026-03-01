@@ -4,11 +4,10 @@ import { c } from './splash.js';
  * Line-buffered formatter for CLI: detects markdown code blocks and prints
  * them with clear borders and colors. Keeps [model] prompt-style output clear.
  */
-export function createStreamFormatter(write, modelLabel) {
+export function createStreamFormatter(write) {
   let lineBuffer = '';
   let inCodeBlock = false;
   let codeLang = '';
-  let lineCount = 0;
 
   function flushLine(line) {
     const trimmed = line.trimEnd();
