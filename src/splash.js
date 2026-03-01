@@ -80,6 +80,8 @@ export function printHelp() {
   console.log(`  ${c.cyan}<execute_command>${c.reset} Run a shell command ${c.red}(requires approval)${c.reset}`);
   console.log(`  ${c.cyan}<search_code>${c.reset}     Search files for a pattern`);
   console.log('');
+  console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3… to switch; approval prompts accept 1=yes, 2=no, 3=always, 4=save${c.reset}`);
+  console.log('');
 }
 
 export function printTools() {

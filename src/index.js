@@ -245,10 +245,31 @@ export async function runCli(argv) {
           } else {
             console.log('');
             console.log(`  ${c.magenta}${c.bold}Available Models${c.reset}`);
-            for (const m of models) {
+            models.forEach((m, i) => {
+              const num = `${i + 1}.`;
               const marker = m.name === currentModel ? ` ${c.green}← active${c.reset}` : '';
               const size = m.size ? ` ${c.gray}(${(m.size / 1e9).toFixed(1)} GB)${c.reset}` : '';
-              console.log(`  ${c.cyan}•${c.reset} ${c.white}${m.name}${c.reset}${size}${marker}`);
+              console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${m.name}${c.reset}${size}${marker}`);
+            });
+            console.log('');
+            const choice = (await ask(`  ${c.yellow}Enter number to switch model${c.reset} (or ${c.gray}Enter${c.reset} to skip): `)).trim();
+            const idx = parseInt(choice, 10);
+            if (choice !== '' && Number.isInteger(idx) && idx >= 1 && idx <= models.length) {
+              const chosen = models[idx - 1].name;
+              currentModel = chosen;
+              const autoUnleash = isUncensoredModel(currentModel);
+              if (autoUnleash && !isUnleashedMode()) {
+                setUnleashedMode(true);
+                console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model)${c.reset}`);
+              } else if (!autoUnleash && isUnleashedMode()) {
+                setUnleashedMode(false);
+                console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset}`);
+              }
+              const newSP = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+              messages = [{ role: 'system', content: newSP }];
+              console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
+            } else if (choice !== '') {
+              console.log(style.warn(`  Invalid choice. Use 1–${models.length} or Enter to skip.`));
             }
             console.log('');
           }

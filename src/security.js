@@ -75,11 +75,12 @@ async function confirmPath(filePath, action, cwd) {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) =>
-    rl.question(`  ${c.yellow}Allow ${action}? ${c.green}[y]es${c.reset} / ${c.red}[n]o${c.reset}: `, resolve)
+    rl.question(`  ${c.yellow}Allow ${action}? ${c.green}[1] yes${c.reset} / ${c.red}[2] no${c.reset} (or y/n): `, resolve)
   );
   rl.close();
   const trimmed = (answer || '').trim().toLowerCase();
-  return { approved: trimmed === 'y' || trimmed === 'yes' };
+  const approved = trimmed === 'y' || trimmed === 'yes' || trimmed === '1';
+  return { approved };
 }
 
 // ── Command permissions ─────────────────────────────────────────────────────
@@ -171,12 +172,12 @@ async function confirmCommand(command, cwd) {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) =>
-    rl.question(`  ${c.yellow}Allow? ${c.green}[y]es${c.reset} / ${c.red}[n]o${c.reset} / ${c.cyan}[a]lways (session)${c.reset} / ${c.magenta}[s]ave rule${c.reset}: `, resolve)
+    rl.question(`  ${c.yellow}Allow? ${c.green}[1] yes${c.reset} / ${c.red}[2] no${c.reset} / ${c.cyan}[3] always${c.reset} / ${c.magenta}[4] save rule${c.reset} (or y/n/a/s): `, resolve)
   );
   rl.close();
   const trimmed = (answer || '').trim().toLowerCase();
 
-  if (trimmed === 's' || trimmed === 'save') {
+  if (trimmed === 's' || trimmed === 'save' || trimmed === '4') {
     // Auto-detect the prefix and save as Bash(prefix:*)
     const prefix = command.split(/\s+/)[0];
     const rule = `Bash(${prefix}:*)`;
@@ -185,13 +186,14 @@ async function confirmCommand(command, cwd) {
     return { approved: true, source: 'saved-rule' };
   }
 
-  if (trimmed === 'a' || trimmed === 'always') {
+  if (trimmed === 'a' || trimmed === 'always' || trimmed === '3') {
     autoApproveCommands = true;
     return { approved: true, always: true, source: 'session-always' };
   }
 
-  const approved = trimmed === 'y' || trimmed === 'yes';
-  return { approved, source: approved ? 'user-yes' : 'user-no' };
+  const approved = trimmed === 'y' || trimmed === 'yes' || trimmed === '1';
+  const denied = trimmed === 'n' || trimmed === 'no' || trimmed === '2';
+  return { approved: approved && !denied, source: approved ? 'user-yes' : 'user-no' };
 }
 
 function style_success(text) { return `${c.green}${text}${c.reset}`; }
