@@ -294,11 +294,20 @@ export async function runCli(argv) {
       }
 
       const results = [];
+      const seenToolCalls = new Map();
       for (const call of toolCalls) {
         stepNum++;
         const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
-        spinnerForTool(call.tag, compactMode ? `Step ${stepNum}  ${detail}` : detail);
-        const result = await executeToolCall(workDir, call);
+        const callKey = `${call.tag}:${call.innerText.trim()}`;
+        let result;
+        if (seenToolCalls.has(callKey)) {
+          result = seenToolCalls.get(callKey);
+          if (!compactMode) console.log(`  ${c.gray}  (reused — duplicate tool call)${c.reset}`);
+        } else {
+          spinnerForTool(call.tag, compactMode ? `Step ${stepNum}  ${detail}` : detail);
+          result = await executeToolCall(workDir, call);
+          seenToolCalls.set(callKey, result);
+        }
         const toolLabel = call.tag.replace(/_/g, ' ');
         spinnerStop(compactMode
           ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`

@@ -8,6 +8,7 @@ import {
 } from '../security.js';
 import { c } from '../splash.js';
 import { spinnerStart, spinnerStop, spinnerUpdate } from '../spinner.js';
+import { COMMAND_TIMEOUT_MS } from '../constants.js';
 
 function resolvePath(cwd, filePath) {
   const p = filePath.replace(/\\/g, '/');
@@ -151,24 +152,47 @@ function searchInDir(dir, pattern, maxFiles) {
   return results;
 }
 
+const SPINNER_UPDATE_THROTTLE_MS = 500;
+
 function runCommand(cwd, command) {
   return new Promise((resolve) => {
     spinnerStart(`Executing: ${command.slice(0, 50)}...`, c.magenta);
-    const proc = spawn(command, [], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true, timeout: 30000 });
+    const proc = spawn(command, [], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true });
     let stdout = '';
     let stderr = '';
+    let lastSpinnerUpdate = 0;
+
+    const timeoutId = setTimeout(() => {
+      if (proc.kill('SIGTERM')) {
+        setTimeout(() => proc.kill('SIGKILL'), 2000);
+      }
+      spinnerStop(`${c.red}✗${c.reset} Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s`);
+      resolve({
+        code: 124,
+        stdout: stdout.trim(),
+        stderr: (stderr.trim() + `\n[Timed out after ${COMMAND_TIMEOUT_MS / 1000}s]`).trim(),
+      });
+    }, COMMAND_TIMEOUT_MS);
+
     proc.stdout.on('data', (d) => {
       stdout += d.toString();
-      spinnerUpdate(`Running: ${command.slice(0, 40)}... (${stdout.split('\n').length} lines)`);
+      const now = Date.now();
+      if (now - lastSpinnerUpdate >= SPINNER_UPDATE_THROTTLE_MS) {
+        lastSpinnerUpdate = now;
+        const lines = (stdout.match(/\n/g) || []).length + 1;
+        spinnerUpdate(`Running: ${command.slice(0, 40)}... (${lines} lines)`);
+      }
     });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
+      clearTimeout(timeoutId);
       spinnerStop(code === 0
         ? `${c.green}✓${c.reset} Command completed`
         : `${c.yellow}⚠${c.reset} Command exited with code ${code}`);
-      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
+      resolve({ code: code ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
     });
     proc.on('error', (err) => {
+      clearTimeout(timeoutId);
       spinnerStop(`${c.red}✗${c.reset} Command failed`);
       resolve({ code: 1, stdout: '', stderr: err.message });
     });

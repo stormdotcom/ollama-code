@@ -31,6 +31,9 @@ export const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 export const SERVE_HOST = process.env.OLLAMA_CODE_SERVE_HOST || '0.0.0.0';
 export const SERVE_PORT = parseInt(process.env.OLLAMA_CODE_SERVE_PORT || '3141', 10);
 
+/** Command execution timeout (ms). Node spawn ignores timeout; we enforce manually. */
+export const COMMAND_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_CMD_TIMEOUT || '600000', 10);
+
 /**
  * System prompt — tells the model exactly what permissions it already has.
  * CWD and file tree are injected at runtime so the model knows its context.
