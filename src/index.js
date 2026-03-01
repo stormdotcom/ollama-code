@@ -1,7 +1,7 @@
 import { createInterface } from 'readline';
 import { cwd } from 'process';
 import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js';
-import { printSplash, printVersion, printHelp, printTools, printShortcuts, style, c } from './splash.js';
+import { printSplash, printVersion, printHelp, printTools, printShortcuts, style, c, cliTheme, getLanAddress } from './splash.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
@@ -10,7 +10,7 @@ import { executeToolCall, PARALLEL_SAFE_TOOLS } from './tools/executors.js';
 import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, isUnleashedMode } from './security.js';
 import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings } from './settings.js';
 import { scanProjectTree } from './projectScanner.js';
-import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool } from './spinner.js';
+import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool, spinnerStartThinking } from './spinner.js';
 import { createStreamFormatter } from './outputFormatter.js';
 import { tryConnect as trySessionConnect, isConnected as isSessionConnected, getBackendType, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as sessionDisconnect } from './sessionStore.js';
 import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
@@ -46,6 +46,40 @@ function parseArgs(argv) {
   return args;
 }
 
+// ── Error recovery menu ──────────────────────────────────────────────────────
+// Shows error message + numbered options for what to do next.
+// Returns the user's choice string.
+
+function showErrorBox(title, detail) {
+  console.log('');
+  console.log(`  ${c.red}${c.bold}  ERROR: ${title}${c.reset}`);
+  console.log(`  ${c.gray}${'─'.repeat(50)}${c.reset}`);
+  if (detail) {
+    const lines = String(detail).split('\n').slice(0, 5);
+    for (const line of lines) {
+      console.log(`  ${c.red}  ${line}${c.reset}`);
+    }
+    console.log(`  ${c.gray}${'─'.repeat(50)}${c.reset}`);
+  }
+}
+
+async function showErrorRecovery(ask, title, detail, options) {
+  showErrorBox(title, detail);
+  console.log('');
+  console.log(`  ${c.yellow}${c.bold}What would you like to do?${c.reset}`);
+  for (let i = 0; i < options.length; i++) {
+    console.log(`  ${c.cyan}${i + 1}.${c.reset} ${options[i].label}`);
+  }
+  console.log('');
+  const answer = (await ask(`  ${c.yellow}Choose [1-${options.length}]:${c.reset} `)).trim();
+  const idx = parseInt(answer, 10);
+  if (idx >= 1 && idx <= options.length) {
+    return options[idx - 1].action;
+  }
+  // Default to first option
+  return options[0].action;
+}
+
 export async function runCli(argv) {
   const args = parseArgs(argv);
   const version = getVersion();
@@ -55,17 +89,57 @@ export async function runCli(argv) {
     return;
   }
 
-  // ── Preflight ─────────────────────────────────────────────────────────
-  spinnerStart('Connecting to Ollama...', c.cyan);
-  const preflight = await checkOllamaRunning();
-  if (!preflight.ok) {
-    spinnerStop(`${c.red}✗${c.reset} Connection failed`);
-    console.error(style.error(preflight.error));
-    process.exit(1);
+  // ── Global error handlers — never exit, just log ────────────────────
+  process.on('uncaughtException', (err) => {
+    showErrorBox('Uncaught exception', err.message || err);
+    console.log(`  ${c.gray}The CLI will continue. Type /help for commands.${c.reset}\n`);
+  });
+  process.on('unhandledRejection', (reason) => {
+    showErrorBox('Unhandled promise rejection', reason?.message || String(reason));
+    console.log(`  ${c.gray}The CLI will continue. Type /help for commands.${c.reset}\n`);
+  });
+
+  // ── REPL readline — create early so error recovery can prompt ────────
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (prompt) => new Promise((resolve) => rl.question(prompt, resolve));
+
+  // ── Preflight with retry ─────────────────────────────────────────────
+  let preflight = { ok: false };
+  let currentModel = args.model;
+
+  while (!preflight.ok) {
+    spinnerStart('Connecting to Ollama...', c.cyan);
+    preflight = await checkOllamaRunning();
+    if (!preflight.ok) {
+      spinnerStop(`${c.red}✗${c.reset} Connection failed`);
+      const action = await showErrorRecovery(ask, 'Cannot connect to Ollama', preflight.error, [
+        { label: 'Retry connection',                action: 'retry' },
+        { label: 'Change Ollama URL (enter new)',    action: 'change-url' },
+        { label: 'Continue without Ollama (limited)', action: 'continue' },
+        { label: 'Exit',                             action: 'exit' },
+      ]);
+      if (action === 'retry') continue;
+      if (action === 'change-url') {
+        const newUrl = (await ask(`  ${c.cyan}Enter Ollama URL${c.reset} (e.g. http://192.168.1.100:11434): `)).trim();
+        if (newUrl) {
+          process.env.OLLAMA_BASE_URL = newUrl;
+          console.log(`  ${c.green}Set OLLAMA_BASE_URL=${newUrl}${c.reset}`);
+          console.log(`  ${c.gray}Note: This requires a restart to take effect in the client.${c.reset}\n`);
+        }
+        continue;
+      }
+      if (action === 'exit') {
+        rl.close();
+        return;
+      }
+      // 'continue' — break out with no models
+      preflight = { ok: true, models: [] };
+      console.log(style.warn('  Continuing without Ollama. Model calls will fail until connected.'));
+      break;
+    }
   }
   spinnerStop(`${c.green}✓${c.reset} Connected to Ollama`);
 
-  let currentModel = args.model;
   if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
     const fallback = preflight.models[0];
     console.warn(style.warn(`Model "${currentModel}" not found. Falling back to "${fallback}".`));
@@ -94,22 +168,35 @@ export async function runCli(argv) {
 
   // ── Parallel init: settings + scan (sync) + git + sessions + chroma (async) ──
   spinnerStart('Initializing...', c.cyan);
-  const settings = loadSettings(workDir);
-  const fileTree = scanProjectTree(workDir);
-  const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
+  let settings, fileTree, fileCount, gitContext, sessionBackend, chromaOk, gitInfo;
+  try {
+    settings = loadSettings(workDir);
+    fileTree = scanProjectTree(workDir);
+    fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
 
-  const initTasks = [getGitContext()];
-  if (!args.noSessions) initTasks.push(trySessionConnect(workDir));
-  if (!args.noRag) initTasks.push(tryConnectChroma());
-  const results = await Promise.all(initTasks);
-  const gitContext = results[0];
-  const sessionBackend = args.noSessions ? 'none' : (results[1] || 'none');
-  const chromaOk = args.noRag ? false : !!(args.noSessions ? results[1] : results[2]);
+    const initTasks = [getGitContext()];
+    if (!args.noSessions) initTasks.push(trySessionConnect(workDir));
+    if (!args.noRag) initTasks.push(tryConnectChroma());
+    const results = await Promise.all(initTasks);
+    gitContext = results[0];
+    sessionBackend = args.noSessions ? 'none' : (results[1] || 'none');
+    chromaOk = args.noRag ? false : !!(args.noSessions ? results[1] : results[2]);
+    gitInfo = formatGitContextForPrompt(gitContext);
+  } catch (err) {
+    spinnerStop(`${c.yellow}⚠${c.reset} Init partially failed`);
+    showErrorBox('Initialization error', err.message);
+    console.log(`  ${c.gray}Continuing with defaults...${c.reset}\n`);
+    settings = { permissions: { allow: [], deny: [] } };
+    fileTree = '';
+    fileCount = 0;
+    gitInfo = '';
+    sessionBackend = 'none';
+    chromaOk = false;
+  }
 
   const allowRules = settings.permissions?.allow || [];
   const denyRules = settings.permissions?.deny || [];
   const ruleCount = allowRules.length + denyRules.length;
-  const gitInfo = formatGitContextForPrompt(gitContext);
   const sessionsOk = sessionBackend !== 'none';
 
   spinnerStop(
@@ -122,7 +209,7 @@ export async function runCli(argv) {
 
   let ragEnabled = chromaOk;
 
-  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() });
 
   let sessionId = generateSessionId();
   let messages = [];
@@ -135,14 +222,20 @@ export async function runCli(argv) {
   // ── Resume session or start fresh ──────────────────────────────────
   if (args.resume && sessionsOk) {
     spinnerStart('Resuming session...', c.cyan);
-    const session = await loadSession(args.resume);
-    if (session) {
-      messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
-      sessionId = session.sessionId;
-      currentModel = session.model || currentModel;
-      spinnerStop(`${c.green}✓${c.reset} Resumed session ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages)`);
-    } else {
-      spinnerStop(`${c.yellow}!${c.reset} Session not found, starting fresh`);
+    try {
+      const session = await loadSession(args.resume);
+      if (session) {
+        messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
+        sessionId = session.sessionId;
+        currentModel = session.model || currentModel;
+        spinnerStop(`${c.green}✓${c.reset} Resumed session ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages)`);
+      } else {
+        spinnerStop(`${c.yellow}!${c.reset} Session not found, starting fresh`);
+        resetMessages();
+      }
+    } catch (err) {
+      spinnerStop(`${c.yellow}!${c.reset} Failed to resume session`);
+      console.log(`  ${c.red}${err.message}${c.reset}`);
       resetMessages();
     }
   } else {
@@ -164,7 +257,10 @@ export async function runCli(argv) {
     }
   }
   if (sessionsOk) {
+    const lanIp = getLanAddress();
+    const lanPort = process.env.OLLAMA_CODE_SERVE_PORT || '3141';
     console.log(`  ${c.cyan}Session${c.reset}  ${c.gray}${sessionId}${c.reset} ${c.gray}(${sessionBackend} backend | /session to view)${c.reset}`);
+    console.log(`  ${c.cyan}LAN UI${c.reset}   ${c.gray}http://${lanIp}:${lanPort}${c.reset} ${c.gray}(run with --serve to enable)${c.reset}`);
     console.log('');
   }
 
@@ -173,14 +269,12 @@ export async function runCli(argv) {
   console.log(`  ${c.gray}Type /shortcuts for all keyboard shortcuts${c.reset}`);
   console.log('');
 
-  // ── REPL ──────────────────────────────────────────────────────────────
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (prompt) => new Promise((resolve) => rl.question(prompt, resolve));
-
   rl.on('close', async () => {
     console.log(style.info('\nGoodbye.'));
-    await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
-    await sessionDisconnect();
+    try {
+      await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
+      await sessionDisconnect();
+    } catch { /* best effort */ }
     process.exit(0);
   });
 
@@ -200,11 +294,80 @@ export async function runCli(argv) {
     });
   }
 
-  let compactDisplay = args.compact; // display mode only
+  let compactDisplay = args.compact;
   let jobRunning = false;
   const inputQueue = [];
 
+  // ── Dedicated input prompt ─────────────────────────────────────────────
+  // Always accepts input, even while a job is running.
+  // When idle: shows "You: " prompt. When busy: shows "(queued) > " prompt.
+  function showPrompt() {
+    if (jobRunning) {
+      rl.setPrompt(`  ${c.gray}(queued)${c.reset} ${c.dim}>${c.reset} `);
+    } else {
+      rl.setPrompt(style.prompt());
+    }
+    rl.prompt(true); // true = preserve existing input on the line
+  }
+
   const seenCommandsThisTurn = new Set();
+
+  // ── Redraw prompt after output ──────────────────────────────────────
+  function redrawPrompt() {
+    // Clear current line and show a fresh prompt
+    process.stdout.write('\r\x1b[2K');
+    showPrompt();
+  }
+
+  // ── Error recovery after a failed agentic turn ────────────────────────
+  async function handleTurnError(err, userInput) {
+    const action = await showErrorRecovery(ask, 'Task failed', err?.message || String(err), [
+      { label: 'Retry the same task',            action: 'retry' },
+      { label: 'Clear conversation and continue', action: 'clear' },
+      { label: 'Switch model (/models)',          action: 'models' },
+      { label: 'Skip and continue',               action: 'skip' },
+    ]);
+
+    switch (action) {
+      case 'retry':
+        try {
+          await runAgenticTurn(userInput);
+        } catch (retryErr) {
+          showErrorBox('Retry also failed', retryErr?.message);
+          console.log(`  ${c.gray}Returning to prompt. Try /clear or /model to recover.${c.reset}\n`);
+        }
+        break;
+      case 'clear':
+        resetMessages();
+        console.log(style.success('  Conversation cleared. Ready for new input.'));
+        break;
+      case 'models':
+        // Trigger the /models flow inline
+        try {
+          const models = await listModels();
+          if (models.length > 0) {
+            models.forEach((m, i) => {
+              const marker = m.name === currentModel ? ` ${c.green}← active${c.reset}` : '';
+              console.log(`  ${c.cyan}${(i + 1 + '.').padEnd(3)}${c.reset} ${m.name}${marker}`);
+            });
+            const choice = (await ask(`  ${c.yellow}Enter number:${c.reset} `)).trim();
+            const idx = parseInt(choice, 10);
+            if (idx >= 1 && idx <= models.length) {
+              currentModel = models[idx - 1].name;
+              resetMessages();
+              console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
+            }
+          } else {
+            console.log(style.warn('  No models available.'));
+          }
+        } catch { console.log(style.warn('  Failed to list models.')); }
+        break;
+      case 'skip':
+      default:
+        console.log(`  ${c.gray}Skipped. Ready for new input.${c.reset}\n`);
+        break;
+    }
+  }
 
   async function runAgenticTurn(userInput) {
     seenCommandsThisTurn.clear();
@@ -252,7 +415,15 @@ export async function runCli(argv) {
       const formatter = compactDisplay ? null : createStreamFormatter(writeOut);
 
       const promptTokens = estimateMessagesTokens(messages);
-      spinnerStart(compactDisplay ? `Step ${stepNum}  Thinking...` : 'Thinking...', c.magenta);
+      if (!compactDisplay) {
+        console.log(`  ${cliTheme.bulletActive()} ${c.cyan}${currentModel}${c.reset} ${c.gray}(working)${c.reset}`);
+        console.log(cliTheme.statusLine('Thinking...', 'Ctrl+C to interrupt'));
+      }
+      if (compactDisplay) {
+        spinnerStart(`Step ${stepNum}  Thinking...`, c.magenta);
+      } else {
+        spinnerStartThinking();
+      }
 
       const interruptHandler = () => {
         interrupted = true;
@@ -266,7 +437,7 @@ export async function runCli(argv) {
         if (compactDisplay) return;
         if (firstToken) {
           spinnerStop();
-          process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
+          process.stdout.write(`\n\n${cliTheme.assistantPrefix(currentModel)}`);
           firstToken = false;
         }
         formatter.push(token);
@@ -276,16 +447,48 @@ export async function runCli(argv) {
         turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
       } catch (err) {
         spinnerStop();
+        process.removeListener('SIGINT', interruptHandler);
         if (interrupted) {
-          process.removeListener('SIGINT', interruptHandler);
           if (turnContent) {
             messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
           }
           return;
         }
-        console.log('\n' + style.error('Error: ' + (err.message || err)));
-        messages.pop();
-        process.removeListener('SIGINT', interruptHandler);
+        // Streaming error — show recovery options
+        const action = await showErrorRecovery(ask, 'Model request failed', err.message || err, [
+          { label: 'Retry this step',      action: 'retry' },
+          { label: 'Skip and return to prompt', action: 'skip' },
+          { label: 'Switch model',          action: 'models' },
+          { label: 'Clear conversation',    action: 'clear' },
+        ]);
+        if (action === 'retry') {
+          messages.pop(); // remove the user message we just added, re-add on next iteration
+          messages.push({ role: 'user', content: userInput });
+          continue; // retry the while loop
+        }
+        if (action === 'models') {
+          try {
+            const models = await listModels();
+            if (models.length > 0) {
+              models.forEach((m, i) => {
+                const marker = m.name === currentModel ? ` ${c.green}← active${c.reset}` : '';
+                console.log(`  ${c.cyan}${(i + 1 + '.').padEnd(3)}${c.reset} ${m.name}${marker}`);
+              });
+              const choice = (await ask(`  ${c.yellow}Enter number:${c.reset} `)).trim();
+              const idx = parseInt(choice, 10);
+              if (idx >= 1 && idx <= models.length) {
+                currentModel = models[idx - 1].name;
+                console.log(style.success(`  Switched to ${currentModel}. Retrying...`));
+                continue; // retry with new model
+              }
+            }
+          } catch { /* ignore */ }
+        }
+        if (action === 'clear') {
+          resetMessages();
+          console.log(style.success('  Conversation cleared.'));
+        }
+        // 'skip' or fallthrough
         return;
       }
       process.removeListener('SIGINT', interruptHandler);
@@ -313,27 +516,29 @@ export async function runCli(argv) {
       if (toolCalls.length === 0) break;
 
       if (!compactDisplay) {
-        console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
+        const toolSummary = toolCalls.length === 1
+          ? `${toolCalls[0].tag.replace(/_/g, ' ')}...`
+          : `Executing ${toolCalls.length} tool(s)...`;
+        console.log(cliTheme.statusLine(toolSummary, 'Ctrl+C to interrupt'));
       }
 
       // ── Parallel execution for read-only tools ─────────────────────
       const results = [];
       const seenToolCalls = new Map();
 
-      // Classify tools into parallel-safe and sequential batches
       const canParallelize = toolCalls.length > 1 && toolCalls.every(tc => PARALLEL_SAFE_TOOLS.has(tc.tag));
 
       if (canParallelize) {
-        // All tools are read-only, run in parallel
-        const promises = toolCalls.map(async (call, idx) => {
-          const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+        const promises = toolCalls.map(async (call) => {
           const callKey = `${call.tag}:${call.innerText.trim()}`;
-          if (seenToolCalls.has(callKey)) {
-            return seenToolCalls.get(callKey);
+          if (seenToolCalls.has(callKey)) return seenToolCalls.get(callKey);
+          try {
+            const result = await executeToolCall(workDir, call);
+            seenToolCalls.set(callKey, result);
+            return result;
+          } catch (toolErr) {
+            return `[${call.tag}] error: ${toolErr.message}`;
           }
-          const result = await executeToolCall(workDir, call);
-          seenToolCalls.set(callKey, result);
-          return result;
         });
         const parallelResults = await Promise.all(promises);
         for (let i = 0; i < toolCalls.length; i++) {
@@ -350,12 +555,13 @@ export async function runCli(argv) {
           results.push(parallelResults[i]);
         }
       } else {
-        // Sequential execution (has write/execute tools)
         for (const call of toolCalls) {
           stepNum++;
           const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
           const callKey = `${call.tag}:${call.innerText.trim()}`;
           let result;
+          let toolStart = Date.now();
+          let actuallyRan = false;
           if (call.tag === 'execute_command' && seenCommandsThisTurn.has(callKey)) {
             result = `[execute_command] (skipped — already ran this turn)\n${call.innerText.trim()}`;
             if (!compactDisplay) console.log(`  ${c.gray}  (skipped — already ran this turn)${c.reset}`);
@@ -363,15 +569,48 @@ export async function runCli(argv) {
             result = seenToolCalls.get(callKey);
             if (!compactDisplay) console.log(`  ${c.gray}  (reused — duplicate in same batch)${c.reset}`);
           } else {
+            const isExecute = call.tag === 'execute_command';
+            if (isExecute && !compactDisplay) {
+              console.log(cliTheme.runningCommand(call.innerText.trim()));
+            }
+            toolStart = Date.now();
+            actuallyRan = true;
             spinnerForTool(call.tag, compactDisplay ? `Step ${stepNum}  ${detail}` : detail);
-            result = await executeToolCall(workDir, call);
+            try {
+              result = await executeToolCall(workDir, call);
+            } catch (toolErr) {
+              result = `[${call.tag}] error: ${toolErr.message}`;
+              spinnerStop(`${c.red}✗${c.reset} ${call.tag} failed`);
+              console.log(`  ${c.red}${toolErr.message}${c.reset}`);
+              // Show inline recovery for tool errors
+              const toolAction = await showErrorRecovery(ask, `Tool "${call.tag}" failed`, toolErr.message, [
+                { label: 'Skip this tool and continue', action: 'skip' },
+                { label: 'Retry this tool',             action: 'retry' },
+                { label: 'Abort this turn',             action: 'abort' },
+              ]);
+              if (toolAction === 'retry') {
+                try {
+                  result = await executeToolCall(workDir, call);
+                } catch (retryErr) {
+                  result = `[${call.tag}] error: ${retryErr.message} (retry also failed)`;
+                }
+              } else if (toolAction === 'abort') {
+                messages.push({ role: 'user', content: `[Tool results]\n${results.join('\n---\n')}\n---\n[Turn aborted by user after tool error]` });
+                return;
+              }
+              // 'skip' — continue with error result
+            }
             seenToolCalls.set(callKey, result);
             if (call.tag === 'execute_command') seenCommandsThisTurn.add(callKey);
           }
           const toolLabel = call.tag.replace(/_/g, ' ');
-          spinnerStop(compactDisplay
-            ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`
-            : `${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
+          const durationSec = ((Date.now() - toolStart) / 1000).toFixed(1);
+          const stopMsg = actuallyRan && call.tag === 'execute_command' && !compactDisplay
+            ? `${c.green}✓${c.reset} ${c.gray}${durationSec}s${c.reset}`
+            : compactDisplay
+              ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`
+              : `${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`;
+          spinnerStop(stopMsg);
           if (!compactDisplay) {
             console.log(style.toolResult('  ' + result.split('\n')[0]));
             if (result.split('\n').length > 1) {
@@ -410,425 +649,441 @@ export async function runCli(argv) {
     }).catch(() => {});
   }
 
-  function processQueue() {
+  function finishJob() {
     jobRunning = false;
-    if (inputQueue.length === 0) return;
+    redrawPrompt();
+  }
+
+  function processQueue() {
+    if (inputQueue.length === 0) {
+      finishJob();
+      return;
+    }
     const next = inputQueue.shift();
-    console.log(`  ${c.cyan}Running queued: ${next.slice(0, 60)}${next.length > 60 ? '...' : ''}${c.reset}\n`);
+    console.log(`\n  ${c.cyan}Running queued: ${next.slice(0, 60)}${next.length > 60 ? '...' : ''}${c.reset}\n`);
     jobRunning = true;
-    runAgenticTurn(next).then(processQueue).catch((err) => {
-      console.error(style.error('Queued task failed: ' + (err && err.message)));
+    runAgenticTurn(next).then(processQueue).catch(async (err) => {
+      await handleTurnError(err, next);
       processQueue();
     });
   }
 
-  while (true) {
-    const userInput = await ask(style.prompt());
-    const trimmed = (userInput || '').trim();
-    if (!trimmed) continue;
-
+  // ── Handle a single line of input (slash command or prompt) ────────
+  async function handleInput(trimmed) {
     // ── Slash commands ────────────────────────────────────────────────
     if (trimmed.startsWith('/')) {
       const [cmd, ...rest] = trimmed.split(/\s+/);
       const cmdArg = rest.join(' ');
-      switch (cmd.toLowerCase()) {
-        case '/exit': case '/quit': case '/q':
-          rl.close();
-          console.log(style.info('Goodbye.'));
-          return;
+      try {
+        switch (cmd.toLowerCase()) {
+          case '/exit': case '/quit': case '/q':
+            rl.close();
+            console.log(style.info('Goodbye.'));
+            return;
 
-        case '/help':
-          printHelp();
-          continue;
+          case '/help':
+            printHelp();
+            return;
 
-        case '/tools':
-          printTools();
-          continue;
+          case '/tools':
+            printTools();
+            return;
 
-        case '/shortcuts': case '/keys': case '/keybindings':
-          printShortcuts();
-          continue;
+          case '/shortcuts': case '/keys': case '/keybindings':
+            printShortcuts();
+            return;
 
-        case '/unleash': case '/unleashed': {
-          const wasUnleashed = isUnleashedMode();
-          setUnleashedMode(!wasUnleashed);
-          if (isUnleashedMode()) {
-            console.log(`\n  ${c.magenta}${c.bold}⚡ UNLEASHED MODE ON${c.reset}`);
-            console.log(`  ${c.gray}Blocked commands → promptable | Secret scan → informational${c.reset}`);
-            console.log(`  ${c.gray}Exploit, reverse engineering & offensive code allowed${c.reset}`);
-          } else {
-            console.log(`\n  ${c.green}${c.bold}🔒 UNLEASHED MODE OFF${c.reset}`);
-            console.log(`  ${c.gray}Standard security restrictions restored${c.reset}`);
-          }
-          resetMessages();
-          const newSystemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
-          messages = [{ role: 'system', content: newSystemPrompt }];
-          console.log(style.info('  Conversation cleared with new system prompt.'));
-          console.log('');
-          continue;
-        }
-
-        case '/compact': {
-          if (cmdArg === 'display' || cmdArg === 'toggle') {
-            compactDisplay = !compactDisplay;
-            console.log(compactDisplay
-              ? `  ${c.cyan}Compact display ON${c.reset} ${c.gray}— model output hidden, showing progress steps only${c.reset}`
-              : `  ${c.cyan}Compact display OFF${c.reset} ${c.gray}— full model output visible${c.reset}`);
-            continue;
-          }
-          // Default: actually compact/summarize the conversation
-          if (messages.length <= 4) {
-            console.log(`  ${c.gray}Conversation too short to compact.${c.reset}`);
-            continue;
-          }
-          spinnerStart('Compacting conversation...', c.cyan);
-          const beforeCount = messages.length;
-          const beforeTokens = estimateMessagesTokens(messages);
-          const result = await compactConversation(currentModel, messages);
-          if (result.summarized) {
-            messages = result.messages;
-            const afterTokens = estimateMessagesTokens(messages);
-            tokenTracker.addCompaction();
-            spinnerStop(`${c.green}✓${c.reset} Compacted: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
-          } else {
-            // Fall back to prune
-            const pruned = autoPrune(messages, { keepRecent: 6 });
-            if (pruned.pruned) {
-              messages = pruned.messages;
-              const afterTokens = estimateMessagesTokens(messages);
-              spinnerStop(`${c.yellow}!${c.reset} Pruned: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
+          case '/unleash': case '/unleashed': {
+            const wasUnleashed = isUnleashedMode();
+            setUnleashedMode(!wasUnleashed);
+            if (isUnleashedMode()) {
+              console.log(`\n  ${c.magenta}${c.bold}⚡ UNLEASHED MODE ON${c.reset}`);
+              console.log(`  ${c.gray}Blocked commands → promptable | Secret scan → informational${c.reset}`);
+              console.log(`  ${c.gray}Exploit, reverse engineering & offensive code allowed${c.reset}`);
             } else {
-              spinnerStop(`${c.gray}Nothing to compact.${c.reset}`);
+              console.log(`\n  ${c.green}${c.bold}🔒 UNLEASHED MODE OFF${c.reset}`);
+              console.log(`  ${c.gray}Standard security restrictions restored${c.reset}`);
             }
+            resetMessages();
+            const newSystemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+            messages = [{ role: 'system', content: newSystemPrompt }];
+            console.log(style.info('  Conversation cleared with new system prompt.'));
+            console.log('');
+            return;
           }
-          console.log(`  ${c.gray}Use "/compact display" to toggle output visibility instead.${c.reset}`);
-          continue;
-        }
 
-        case '/clear':
-          resetMessages();
-          console.log(style.success('  Conversation cleared.'));
-          continue;
-
-        case '/model':
-          if (!cmdArg) {
-            console.log(`  ${c.cyan}Current model:${c.reset} ${c.bold}${currentModel}${c.reset}`);
-            console.log(`  ${c.gray}Usage: /model <name>  (e.g. /model deepseek-r1:7b)${c.reset}`);
-          } else {
-            currentModel = cmdArg;
-            const autoUnleash = isUncensoredModel(currentModel);
-            if (autoUnleash && !isUnleashedMode()) {
-              setUnleashedMode(true);
-              console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model detected)${c.reset}`);
-            } else if (!autoUnleash && isUnleashedMode()) {
-              setUnleashedMode(false);
-              console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset} ${c.gray}(standard model)${c.reset}`);
+          case '/compact': {
+            if (cmdArg === 'display' || cmdArg === 'toggle') {
+              compactDisplay = !compactDisplay;
+              console.log(compactDisplay
+                ? `  ${c.cyan}Compact display ON${c.reset} ${c.gray}— model output hidden, showing progress steps only${c.reset}`
+                : `  ${c.cyan}Compact display OFF${c.reset} ${c.gray}— full model output visible${c.reset}`);
+              return;
             }
-            const newSP = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
-            messages = [{ role: 'system', content: newSP }];
-            console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
+            if (messages.length <= 4) {
+              console.log(`  ${c.gray}Conversation too short to compact.${c.reset}`);
+              return;
+            }
+            spinnerStart('Compacting conversation...', c.cyan);
+            try {
+              const beforeCount = messages.length;
+              const beforeTokens = estimateMessagesTokens(messages);
+              const result = await compactConversation(currentModel, messages);
+              if (result.summarized) {
+                messages = result.messages;
+                const afterTokens = estimateMessagesTokens(messages);
+                tokenTracker.addCompaction();
+                spinnerStop(`${c.green}✓${c.reset} Compacted: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
+              } else {
+                const pruned = autoPrune(messages, { keepRecent: 6 });
+                if (pruned.pruned) {
+                  messages = pruned.messages;
+                  const afterTokens = estimateMessagesTokens(messages);
+                  spinnerStop(`${c.yellow}!${c.reset} Pruned: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
+                } else {
+                  spinnerStop(`${c.gray}Nothing to compact.${c.reset}`);
+                }
+              }
+            } catch (compactErr) {
+              spinnerStop(`${c.red}✗${c.reset} Compact failed`);
+              console.log(`  ${c.red}${compactErr.message}${c.reset}`);
+              console.log(`  ${c.gray}Conversation unchanged. Try /clear to start fresh.${c.reset}`);
+            }
+            console.log(`  ${c.gray}Use "/compact display" to toggle output visibility instead.${c.reset}`);
+            return;
           }
-          continue;
 
-        case '/models': {
-          spinnerStart('Fetching models...', c.cyan);
-          const models = await listModels();
-          spinnerStop();
-          if (models.length === 0) {
-            console.log(style.warn('  No models found. Pull one with: ollama pull <model>'));
-          } else {
-            console.log('');
-            console.log(`  ${c.magenta}${c.bold}Available Models${c.reset}`);
-            models.forEach((m, i) => {
-              const num = `${i + 1}.`;
-              const marker = m.name === currentModel ? ` ${c.green}← active${c.reset}` : '';
-              const size = m.size ? ` ${c.gray}(${(m.size / 1e9).toFixed(1)} GB)${c.reset}` : '';
-              console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${m.name}${c.reset}${size}${marker}`);
-            });
-            console.log('');
-            const choice = (await ask(`  ${c.yellow}Enter number to switch model${c.reset} (or ${c.gray}Enter${c.reset} to skip): `)).trim();
-            const idx = parseInt(choice, 10);
-            if (choice !== '' && Number.isInteger(idx) && idx >= 1 && idx <= models.length) {
-              const chosen = models[idx - 1].name;
-              currentModel = chosen;
+          case '/clear':
+            resetMessages();
+            console.log(style.success('  Conversation cleared.'));
+            return;
+
+          case '/model':
+            if (!cmdArg) {
+              console.log(`  ${c.cyan}Current model:${c.reset} ${c.bold}${currentModel}${c.reset}`);
+              console.log(`  ${c.gray}Usage: /model <name>  (e.g. /model deepseek-r1:7b)${c.reset}`);
+            } else {
+              currentModel = cmdArg;
               const autoUnleash = isUncensoredModel(currentModel);
               if (autoUnleash && !isUnleashedMode()) {
                 setUnleashedMode(true);
-                console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model)${c.reset}`);
+                console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model detected)${c.reset}`);
               } else if (!autoUnleash && isUnleashedMode()) {
                 setUnleashedMode(false);
-                console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset}`);
+                console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset} ${c.gray}(standard model)${c.reset}`);
               }
               const newSP = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
               messages = [{ role: 'system', content: newSP }];
               console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
-            } else if (choice !== '') {
-              console.log(style.warn(`  Invalid choice. Use 1–${models.length} or Enter to skip.`));
             }
-            console.log('');
-          }
-          continue;
-        }
+            return;
 
-        case '/session':
-          if (!isSessionConnected()) {
-            console.log(style.warn('  Sessions not available (no MongoDB or file backend).'));
-          } else {
-            console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
-            console.log(`  ${c.cyan}Backend${c.reset}     ${c.gray}${getBackendType()}${c.reset}`);
-            console.log(`  ${c.gray}Use this ID to resume from another device. Run with --serve to view chat from LAN.${c.reset}`);
-          }
-          continue;
-
-        case '/pause': case '/save': {
-          if (!isSessionConnected()) {
-            console.log(style.warn('  Sessions not available.'));
-            continue;
-          }
-          const name = cmdArg || null;
-          spinnerStart('Saving session...', c.cyan);
-          await saveSession(sessionId, { name, model: currentModel, messages, metadata: { cwd: workDir, unleashed: isUnleashedMode(), fileCount } });
-          spinnerStop(`${c.green}✓${c.reset} Session saved ${name ? `as "${name}"` : `(${sessionId.slice(0, 8)})`}`);
-          if (cmd.toLowerCase() === '/pause') {
-            console.log(`  ${c.gray}Paused. Use /resume <id> or ollama-code --resume ${sessionId} to continue.${c.reset}`);
-          }
-          continue;
-        }
-
-        case '/sessions': {
-          if (!isSessionConnected()) {
-            console.log(style.warn('  Sessions not available.'));
-            continue;
-          }
-          spinnerStart('Loading sessions...', c.cyan);
-          const sessions = await listSessions(20);
-          spinnerStop();
-          if (sessions.length === 0) {
-            console.log(style.info('  No saved sessions.'));
-          } else {
-            console.log('');
-            console.log(`  ${c.magenta}${c.bold}Saved Sessions${c.reset} ${c.gray}(${getBackendType()})${c.reset}`);
-            sessions.forEach((s, i) => {
-              const num = `${i + 1}.`;
-              const label = s.name || s.sessionId.slice(0, 8);
-              const date = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '?';
-              const active = s.sessionId === sessionId ? ` ${c.green}← current${c.reset}` : '';
-              console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${label}${c.reset} ${c.gray}(${s.model}, ${date})${c.reset}${active}`);
-            });
-            console.log('');
-            console.log(`  ${c.gray}Use /resume <number> to load a session${c.reset}`);
-            console.log('');
-          }
-          continue;
-        }
-
-        case '/resume': {
-          if (!isSessionConnected()) {
-            console.log(style.warn('  Sessions not available.'));
-            continue;
-          }
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /resume <number|name|id>${c.reset}`);
-            continue;
-          }
-          spinnerStart('Loading session...', c.cyan);
-          const idx = parseInt(cmdArg, 10);
-          let session = null;
-          if (Number.isInteger(idx) && idx >= 1) {
-            const all = await listSessions(20);
-            if (idx <= all.length) {
-              session = await loadSession(all[idx - 1].sessionId);
-            }
-          }
-          if (!session) {
-            session = await loadSession(cmdArg);
-          }
-          if (session) {
-            messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
-            sessionId = session.sessionId;
-            currentModel = session.model || currentModel;
-            spinnerStop(`${c.green}✓${c.reset} Resumed ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages, model: ${currentModel})`);
-          } else {
-            spinnerStop(`${c.yellow}!${c.reset} Session not found`);
-          }
-          continue;
-        }
-
-        case '/delete-session': {
-          if (!isSessionConnected()) {
-            console.log(style.warn('  Sessions not available.'));
-            continue;
-          }
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /delete-session <number|id>${c.reset}`);
-            continue;
-          }
-          const delIdx = parseInt(cmdArg, 10);
-          let delId = cmdArg;
-          if (Number.isInteger(delIdx) && delIdx >= 1) {
-            const all = await listSessions(20);
-            if (delIdx <= all.length) delId = all[delIdx - 1].sessionId;
-          }
-          const deleted = await deleteSession(delId);
-          console.log(deleted
-            ? style.success(`  Session deleted.`)
-            : style.warn(`  Session not found.`));
-          continue;
-        }
-
-        case '/usage': case '/cost': case '/tokens': {
-          const stats = tokenTracker.getSummary();
-          const currentCtx = estimateMessagesTokens(messages);
-          console.log('');
-          console.log(`  ${c.magenta}${c.bold}Token Usage${c.reset}`);
-          console.log(`  ${c.cyan}Context now:${c.reset}     ~${currentCtx} tokens (of ${c.bold}32768${c.reset} max)`);
-          console.log(`  ${c.cyan}Messages:${c.reset}        ${messages.length}`);
-          console.log(`  ${c.cyan}Total prompt:${c.reset}    ~${stats.promptTokens} tokens`);
-          console.log(`  ${c.cyan}Total response:${c.reset}  ~${stats.completionTokens} tokens`);
-          console.log(`  ${c.cyan}Combined:${c.reset}        ~${stats.totalTokens} tokens`);
-          console.log(`  ${c.cyan}Turns:${c.reset}           ${stats.turns}`);
-          console.log(`  ${c.cyan}Tool calls:${c.reset}      ${stats.toolCalls}`);
-          console.log(`  ${c.cyan}Compactions:${c.reset}     ${stats.compactions}`);
-          const pct = Math.round((currentCtx / 32768) * 100);
-          const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
-          console.log(`  ${c.cyan}Context usage:${c.reset}   [${pct > 80 ? c.red : pct > 60 ? c.yellow : c.green}${bar}${c.reset}] ${pct}%`);
-          console.log('');
-          continue;
-        }
-
-        case '/index': {
-          if (!isChromaConnected()) {
-            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-            continue;
-          }
-          spinnerStart('Indexing project into ChromaDB...', c.cyan);
-          try {
-            const result = await indexProject(workDir, (done, total, file) => {
-              if (file !== 'done') spinnerUpdate(`Indexing ${done + 1}/${total}: ${file}`);
-            });
-            spinnerStop(`${c.green}✓${c.reset} Indexed ${c.bold}${result.files}${c.reset} file(s), ${c.bold}${result.chunks}${c.reset} chunk(s) into ChromaDB`);
-          } catch (err) {
-            spinnerStop(`${c.red}✗${c.reset} Indexing failed`);
-            console.log(style.error('  ' + (err.message || err)));
-          }
-          continue;
-        }
-
-        case '/search': {
-          if (!isChromaConnected()) {
-            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-            continue;
-          }
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /search <query>  — semantic search your codebase${c.reset}`);
-            continue;
-          }
-          spinnerStart('Searching codebase...', c.cyan);
-          try {
-            const results = await searchRelevant(workDir, cmdArg, 5);
+          case '/models': {
+            spinnerStart('Fetching models...', c.cyan);
+            const models = await listModels();
             spinnerStop();
-            if (results.length === 0) {
-              console.log(style.info('  No results found.'));
+            if (models.length === 0) {
+              console.log(style.warn('  No models found. Pull one with: ollama pull <model>'));
             } else {
               console.log('');
-              console.log(`  ${c.magenta}${c.bold}Search Results${c.reset} ${c.gray}for "${cmdArg}"${c.reset}`);
-              results.forEach((r, i) => {
-                console.log(`  ${c.cyan}${i + 1}.${c.reset} ${c.white}${r.filePath}${c.reset} ${c.gray}(lines ${r.startLine}-${r.endLine}, dist: ${r.distance.toFixed(3)})${c.reset}`);
-                const preview = r.text.split('\n').slice(0, 3).join('\n    ');
-                console.log(`    ${c.gray}${preview}${c.reset}`);
+              console.log(`  ${c.magenta}${c.bold}Available Models${c.reset}`);
+              models.forEach((m, i) => {
+                const num = `${i + 1}.`;
+                const marker = m.name === currentModel ? ` ${c.green}← active${c.reset}` : '';
+                const size = m.size ? ` ${c.gray}(${(m.size / 1e9).toFixed(1)} GB)${c.reset}` : '';
+                console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${m.name}${c.reset}${size}${marker}`);
               });
               console.log('');
+              const choice = (await ask(`  ${c.yellow}Enter number to switch model${c.reset} (or ${c.gray}Enter${c.reset} to skip): `)).trim();
+              const idx = parseInt(choice, 10);
+              if (choice !== '' && Number.isInteger(idx) && idx >= 1 && idx <= models.length) {
+                const chosen = models[idx - 1].name;
+                currentModel = chosen;
+                const autoUnleash = isUncensoredModel(currentModel);
+                if (autoUnleash && !isUnleashedMode()) {
+                  setUnleashedMode(true);
+                  console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model)${c.reset}`);
+                } else if (!autoUnleash && isUnleashedMode()) {
+                  setUnleashedMode(false);
+                  console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset}`);
+                }
+                const newSP = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+                messages = [{ role: 'system', content: newSP }];
+                console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
+              } else if (choice !== '') {
+                console.log(style.warn(`  Invalid choice. Use 1–${models.length} or Enter to skip.`));
+              }
+              console.log('');
             }
-          } catch (err) {
-            spinnerStop(`${c.red}✗${c.reset} Search failed`);
-            console.log(style.error('  ' + (err.message || err)));
+            return;
           }
-          continue;
+
+          case '/session':
+            if (!isSessionConnected()) {
+              console.log(style.warn('  Sessions not available (no MongoDB or file backend).'));
+            } else {
+              console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
+              console.log(`  ${c.cyan}Backend${c.reset}     ${c.gray}${getBackendType()}${c.reset}`);
+              console.log(`  ${c.cyan}LAN UI${c.reset}      ${c.gray}http://${getLanAddress()}:${process.env.OLLAMA_CODE_SERVE_PORT || '3141'}${c.reset}`);
+              console.log(`  ${c.gray}Use this ID to resume from another device. Run with --serve to view chat from LAN.${c.reset}`);
+            }
+            return;
+
+          case '/pause': case '/save': {
+            if (!isSessionConnected()) {
+              console.log(style.warn('  Sessions not available.'));
+              return;
+            }
+            const name = cmdArg || null;
+            spinnerStart('Saving session...', c.cyan);
+            await saveSession(sessionId, { name, model: currentModel, messages, metadata: { cwd: workDir, unleashed: isUnleashedMode(), fileCount } });
+            spinnerStop(`${c.green}✓${c.reset} Session saved ${name ? `as "${name}"` : `(${sessionId.slice(0, 8)})`}`);
+            if (cmd.toLowerCase() === '/pause') {
+              console.log(`  ${c.gray}Paused. Use /resume <id> or ollama-code --resume ${sessionId} to continue.${c.reset}`);
+            }
+            return;
+          }
+
+          case '/sessions': {
+            if (!isSessionConnected()) {
+              console.log(style.warn('  Sessions not available.'));
+              return;
+            }
+            spinnerStart('Loading sessions...', c.cyan);
+            const sessions = await listSessions(20);
+            spinnerStop();
+            if (sessions.length === 0) {
+              console.log(style.info('  No saved sessions.'));
+            } else {
+              console.log('');
+              console.log(`  ${c.magenta}${c.bold}Saved Sessions${c.reset} ${c.gray}(${getBackendType()})${c.reset}`);
+              sessions.forEach((s, i) => {
+                const num = `${i + 1}.`;
+                const label = s.name || s.sessionId.slice(0, 8);
+                const date = s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '?';
+                const active = s.sessionId === sessionId ? ` ${c.green}← current${c.reset}` : '';
+                console.log(`  ${c.cyan}${num.padEnd(3)}${c.reset} ${c.white}${label}${c.reset} ${c.gray}(${s.model}, ${date})${c.reset}${active}`);
+              });
+              console.log('');
+              console.log(`  ${c.gray}Use /resume <number> to load a session${c.reset}`);
+              console.log('');
+            }
+            return;
+          }
+
+          case '/resume': {
+            if (!isSessionConnected()) {
+              console.log(style.warn('  Sessions not available.'));
+              return;
+            }
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /resume <number|name|id>${c.reset}`);
+              return;
+            }
+            spinnerStart('Loading session...', c.cyan);
+            const idx = parseInt(cmdArg, 10);
+            let session = null;
+            if (Number.isInteger(idx) && idx >= 1) {
+              const all = await listSessions(20);
+              if (idx <= all.length) {
+                session = await loadSession(all[idx - 1].sessionId);
+              }
+            }
+            if (!session) {
+              session = await loadSession(cmdArg);
+            }
+            if (session) {
+              messages = session.messages.map((m) => ({ role: m.role, content: m.content }));
+              sessionId = session.sessionId;
+              currentModel = session.model || currentModel;
+              spinnerStop(`${c.green}✓${c.reset} Resumed ${c.bold}${session.name || sessionId.slice(0, 8)}${c.reset} (${session.messages.length} messages, model: ${currentModel})`);
+            } else {
+              spinnerStop(`${c.yellow}!${c.reset} Session not found`);
+            }
+            return;
+          }
+
+          case '/delete-session': {
+            if (!isSessionConnected()) {
+              console.log(style.warn('  Sessions not available.'));
+              return;
+            }
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /delete-session <number|id>${c.reset}`);
+              return;
+            }
+            const delIdx = parseInt(cmdArg, 10);
+            let delId = cmdArg;
+            if (Number.isInteger(delIdx) && delIdx >= 1) {
+              const all = await listSessions(20);
+              if (delIdx <= all.length) delId = all[delIdx - 1].sessionId;
+            }
+            const deleted = await deleteSession(delId);
+            console.log(deleted
+              ? style.success(`  Session deleted.`)
+              : style.warn(`  Session not found.`));
+            return;
+          }
+
+          case '/usage': case '/cost': case '/tokens': {
+            const stats = tokenTracker.getSummary();
+            const currentCtx = estimateMessagesTokens(messages);
+            console.log('');
+            console.log(`  ${c.magenta}${c.bold}Token Usage${c.reset}`);
+            console.log(`  ${c.cyan}Context now:${c.reset}     ~${currentCtx} tokens (of ${c.bold}32768${c.reset} max)`);
+            console.log(`  ${c.cyan}Messages:${c.reset}        ${messages.length}`);
+            console.log(`  ${c.cyan}Total prompt:${c.reset}    ~${stats.promptTokens} tokens`);
+            console.log(`  ${c.cyan}Total response:${c.reset}  ~${stats.completionTokens} tokens`);
+            console.log(`  ${c.cyan}Combined:${c.reset}        ~${stats.totalTokens} tokens`);
+            console.log(`  ${c.cyan}Turns:${c.reset}           ${stats.turns}`);
+            console.log(`  ${c.cyan}Tool calls:${c.reset}      ${stats.toolCalls}`);
+            console.log(`  ${c.cyan}Compactions:${c.reset}     ${stats.compactions}`);
+            const pct = Math.round((currentCtx / 32768) * 100);
+            const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
+            console.log(`  ${c.cyan}Context usage:${c.reset}   [${pct > 80 ? c.red : pct > 60 ? c.yellow : c.green}${bar}${c.reset}] ${pct}%`);
+            console.log('');
+            return;
+          }
+
+          case '/index': {
+            if (!isChromaConnected()) {
+              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+              return;
+            }
+            spinnerStart('Indexing project into ChromaDB...', c.cyan);
+            try {
+              const result = await indexProject(workDir, (done, total, file) => {
+                if (file !== 'done') spinnerUpdate(`Indexing ${done + 1}/${total}: ${file}`);
+              });
+              spinnerStop(`${c.green}✓${c.reset} Indexed ${c.bold}${result.files}${c.reset} file(s), ${c.bold}${result.chunks}${c.reset} chunk(s) into ChromaDB`);
+            } catch (err) {
+              spinnerStop(`${c.red}✗${c.reset} Indexing failed`);
+              console.log(style.error('  ' + (err.message || err)));
+            }
+            return;
+          }
+
+          case '/search': {
+            if (!isChromaConnected()) {
+              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+              return;
+            }
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /search <query>  — semantic search your codebase${c.reset}`);
+              return;
+            }
+            spinnerStart('Searching codebase...', c.cyan);
+            try {
+              const results = await searchRelevant(workDir, cmdArg, 5);
+              spinnerStop();
+              if (results.length === 0) {
+                console.log(style.info('  No results found.'));
+              } else {
+                console.log('');
+                console.log(`  ${c.magenta}${c.bold}Search Results${c.reset} ${c.gray}for "${cmdArg}"${c.reset}`);
+                results.forEach((r, i) => {
+                  console.log(`  ${c.cyan}${i + 1}.${c.reset} ${c.white}${r.filePath}${c.reset} ${c.gray}(lines ${r.startLine}-${r.endLine}, dist: ${r.distance.toFixed(3)})${c.reset}`);
+                  const preview = r.text.split('\n').slice(0, 3).join('\n    ');
+                  console.log(`    ${c.gray}${preview}${c.reset}`);
+                });
+                console.log('');
+              }
+            } catch (err) {
+              spinnerStop(`${c.red}✗${c.reset} Search failed`);
+              console.log(style.error('  ' + (err.message || err)));
+            }
+            return;
+          }
+
+          case '/rag':
+            if (!isChromaConnected()) {
+              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
+              return;
+            }
+            ragEnabled = !ragEnabled;
+            console.log(ragEnabled
+              ? `  ${c.cyan}RAG ON${c.reset} ${c.gray}— relevant code chunks injected before each prompt${c.reset}`
+              : `  ${c.cyan}RAG OFF${c.reset} ${c.gray}— no automatic context injection${c.reset}`);
+            return;
+
+          case '/scan': {
+            const scanPath = cmdArg || '.';
+            const fullPath = resolve(workDir, scanPath);
+            if (!existsSync(fullPath)) {
+              console.log(style.error(`  File not found: ${scanPath}`));
+            } else {
+              spinnerStart(`Scanning ${scanPath} for secrets...`, c.red);
+              const content = readFileSync(fullPath, 'utf8');
+              const findings = scanForSecrets(content, scanPath);
+              spinnerStop(findings.length > 0
+                ? `${c.red}✗${c.reset} Found ${findings.length} potential secret(s)`
+                : `${c.green}✓${c.reset} No secrets found`);
+              printScanResults(scanPath, findings);
+            }
+            return;
+          }
+
+          case '/permissions': case '/perms':
+            console.log('');
+            console.log(`  ${c.magenta}${c.bold}Current Permissions${c.reset}`);
+            console.log(`    ${c.green}✓${c.reset} Read workspace files      ${c.green}auto${c.reset}`);
+            console.log(`    ${c.green}✓${c.reset} Write workspace files     ${c.green}auto${c.reset}`);
+            console.log(`    ${c.green}✓${c.reset} Search workspace          ${c.green}auto${c.reset}`);
+            console.log(`    ${c.yellow}?${c.reset} Outside workspace         ${c.yellow}prompt${c.reset}`);
+            console.log(`    ${c.yellow}?${c.reset} Shell commands             ${c.yellow}prompt (or auto via settings)${c.reset}`);
+            console.log(`    ${c.red}✗${c.reset} Dangerous commands         ${c.red}blocked${c.reset}`);
+            console.log(`  ${c.gray}Workspace: ${workDir}${c.reset}`);
+            printSettings(workDir);
+            return;
+
+          case '/settings':
+            printSettings(workDir);
+            return;
+
+          case '/allow':
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /allow Bash(git:*)${c.reset}`);
+              console.log(`  ${c.gray}       /allow Bash(npm install:*)${c.reset}`);
+              console.log(`  ${c.gray}       /allow Bash(python:*)${c.reset}`);
+              console.log(`  ${c.gray}       /allow Read(*)${c.reset}`);
+              console.log(`  ${c.gray}       /allow Write(src/**)${c.reset}`);
+            } else {
+              addAllowRule(workDir, cmdArg);
+              console.log(style.success(`  Added allow rule: ${cmdArg}`));
+              console.log(style.info(`  Saved to .ollama-code/settings.json`));
+            }
+            return;
+
+          case '/deny':
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /deny Bash(rm:*)${c.reset}`);
+            } else {
+              const { addDenyRule: addDeny } = await import('./settings.js');
+              addDeny(workDir, cmdArg);
+              console.log(style.success(`  Added deny rule: ${cmdArg}`));
+              console.log(style.info(`  Saved to .ollama-code/settings.json`));
+            }
+            return;
+
+          case '/revoke':
+            if (!cmdArg) {
+              console.log(`  ${c.gray}Usage: /revoke Bash(git:*)${c.reset}`);
+            } else {
+              removeAllowRule(workDir, cmdArg);
+              console.log(style.success(`  Removed rule: ${cmdArg}`));
+              console.log(style.info(`  Saved to .ollama-code/settings.json`));
+            }
+            return;
+
+          default:
+            console.log(style.warn(`  Unknown command: ${cmd}. Type /help for commands.`));
+            return;
         }
-
-        case '/rag':
-          if (!isChromaConnected()) {
-            console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-            continue;
-          }
-          ragEnabled = !ragEnabled;
-          console.log(ragEnabled
-            ? `  ${c.cyan}RAG ON${c.reset} ${c.gray}— relevant code chunks injected before each prompt${c.reset}`
-            : `  ${c.cyan}RAG OFF${c.reset} ${c.gray}— no automatic context injection${c.reset}`);
-          continue;
-
-        case '/scan': {
-          const scanPath = cmdArg || '.';
-          const fullPath = resolve(workDir, scanPath);
-          if (!existsSync(fullPath)) {
-            console.log(style.error(`  File not found: ${scanPath}`));
-          } else {
-            spinnerStart(`Scanning ${scanPath} for secrets...`, c.red);
-            const content = readFileSync(fullPath, 'utf8');
-            const findings = scanForSecrets(content, scanPath);
-            spinnerStop(findings.length > 0
-              ? `${c.red}✗${c.reset} Found ${findings.length} potential secret(s)`
-              : `${c.green}✓${c.reset} No secrets found`);
-            printScanResults(scanPath, findings);
-          }
-          continue;
-        }
-
-        case '/permissions': case '/perms':
-          console.log('');
-          console.log(`  ${c.magenta}${c.bold}Current Permissions${c.reset}`);
-          console.log(`    ${c.green}✓${c.reset} Read workspace files      ${c.green}auto${c.reset}`);
-          console.log(`    ${c.green}✓${c.reset} Write workspace files     ${c.green}auto${c.reset}`);
-          console.log(`    ${c.green}✓${c.reset} Search workspace          ${c.green}auto${c.reset}`);
-          console.log(`    ${c.yellow}?${c.reset} Outside workspace         ${c.yellow}prompt${c.reset}`);
-          console.log(`    ${c.yellow}?${c.reset} Shell commands             ${c.yellow}prompt (or auto via settings)${c.reset}`);
-          console.log(`    ${c.red}✗${c.reset} Dangerous commands         ${c.red}blocked${c.reset}`);
-          console.log(`  ${c.gray}Workspace: ${workDir}${c.reset}`);
-          printSettings(workDir);
-          continue;
-
-        case '/settings':
-          printSettings(workDir);
-          continue;
-
-        case '/allow':
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /allow Bash(git:*)${c.reset}`);
-            console.log(`  ${c.gray}       /allow Bash(npm install:*)${c.reset}`);
-            console.log(`  ${c.gray}       /allow Bash(python:*)${c.reset}`);
-            console.log(`  ${c.gray}       /allow Read(*)${c.reset}`);
-            console.log(`  ${c.gray}       /allow Write(src/**)${c.reset}`);
-          } else {
-            addAllowRule(workDir, cmdArg);
-            console.log(style.success(`  Added allow rule: ${cmdArg}`));
-            console.log(style.info(`  Saved to .ollama-code/settings.json`));
-          }
-          continue;
-
-        case '/deny':
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /deny Bash(rm:*)${c.reset}`);
-          } else {
-            const { addDenyRule: addDeny } = await import('./settings.js');
-            addDeny(workDir, cmdArg);
-            console.log(style.success(`  Added deny rule: ${cmdArg}`));
-            console.log(style.info(`  Saved to .ollama-code/settings.json`));
-          }
-          continue;
-
-        case '/revoke':
-          if (!cmdArg) {
-            console.log(`  ${c.gray}Usage: /revoke Bash(git:*)${c.reset}`);
-          } else {
-            removeAllowRule(workDir, cmdArg);
-            console.log(style.success(`  Removed rule: ${cmdArg}`));
-            console.log(style.info(`  Saved to .ollama-code/settings.json`));
-          }
-          continue;
-
-        default:
-          console.log(style.warn(`  Unknown command: ${cmd}. Type /help for commands.`));
-          continue;
+      } catch (cmdErr) {
+        // Catch any error in slash command execution
+        showErrorBox(`Command "${cmd}" failed`, cmdErr?.message || cmdErr);
+        console.log(`  ${c.gray}Returning to prompt. Try again or type /help.${c.reset}\n`);
+        return;
       }
     }
 
@@ -841,14 +1096,39 @@ export async function runCli(argv) {
     // ── Queue or run agentic turn ─────────────────────────────────────
     if (jobRunning) {
       inputQueue.push(trimmed);
-      console.log(`  ${c.gray}Queued (${inputQueue.length}). Current task still running. Type another or wait.${c.reset}\n`);
-      continue;
+      console.log(`  ${c.gray}Queued (${inputQueue.length}). Type more or wait for current task to finish.${c.reset}`);
+      return;
     }
 
     jobRunning = true;
-    runAgenticTurn(trimmed).then(processQueue).catch((err) => {
-      console.error(style.error('Task failed: ' + (err && err.message)));
+    showPrompt(); // switch prompt to "queued" style while running
+    runAgenticTurn(trimmed).then(processQueue).catch(async (err) => {
+      await handleTurnError(err, trimmed);
       processQueue();
     });
   }
+
+  // ── Event-driven input: always accepts keystrokes ─────────────────
+  // Use readline's 'line' event instead of blocking ask() in the main loop.
+  // This means typing is ALWAYS possible, even during model generation.
+  rl.on('line', (line) => {
+    const trimmed = (line || '').trim();
+    if (!trimmed) {
+      showPrompt();
+      return;
+    }
+    // Handle input (may be async for slash commands)
+    handleInput(trimmed).then(() => {
+      showPrompt();
+    }).catch((err) => {
+      showErrorBox('Input handler error', err?.message || err);
+      showPrompt();
+    });
+  });
+
+  // Show the initial prompt
+  showPrompt();
+
+  // Keep the process alive — readline 'close' event handles exit
+  await new Promise(() => {}); // never resolves; rl 'close' calls process.exit
 }

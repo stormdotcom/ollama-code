@@ -82,7 +82,7 @@ You already have these permissions by default. Do NOT invent permission files, t
 | Write / create files | AUTO-ALLOWED | Inside workspace |
 | Write files outside workspace | PROMPT USER | User will be asked to approve |
 | Edit files | AUTO-ALLOWED | Inside workspace |
-| Execute commands | PROMPT USER | User approves each command (or types "always") |
+| Execute commands | PROMPT USER | User approves with [y] once, [a] always (saves rule), [!] all session |
 | Search code | AUTO-ALLOWED | Workspace directory tree |
 | Scan for secrets | AUTO-ALLOWED | Any file |
 

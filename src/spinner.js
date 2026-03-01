@@ -8,13 +8,17 @@ let active = null;
 /**
  * Start an animated spinner with a label.
  * Only one spinner runs at a time — calling start() while one is active replaces it.
+ * @param {string} label - e.g. "Thinking..." or "Running command..."
+ * @param {string} color - ANSI color for label
+ * @param {{ thinking?: boolean }} opts - If thinking: true, shows "Beaming... (thought for Xs)" in red
  */
-export function spinnerStart(label, color = c.cyan) {
+export function spinnerStart(label, color = c.cyan, opts = {}) {
   spinnerStop();
   let frame = 0;
   const state = {
     label,
     color,
+    thinking: !!opts.thinking,
     timer: null,
     startTime: Date.now(),
   };
@@ -22,8 +26,14 @@ export function spinnerStart(label, color = c.cyan) {
   state.timer = setInterval(() => {
     const elapsed = ((Date.now() - state.startTime) / 1000).toFixed(1);
     const spinner = `${c.magenta}${FRAMES[frame % FRAMES.length]}${c.reset}`;
-    const text = `${state.color}${state.label}${c.reset}`;
-    const time = `${c.gray}${elapsed}s${c.reset}`;
+    let text, time;
+    if (state.thinking) {
+      text = `${c.red}Beaming...${c.reset}`;
+      time = `${c.gray}(thought for ${elapsed}s)${c.reset}`;
+    } else {
+      text = `${state.color}${state.label}${c.reset}`;
+      time = `${c.gray}${elapsed}s${c.reset}`;
+    }
     process.stdout.write(`\r  ${spinner} ${text} ${time}  `);
     frame++;
   }, INTERVAL);
@@ -38,6 +48,13 @@ export function spinnerUpdate(label, color) {
   if (!active) return;
   active.label = label;
   if (color) active.color = color;
+}
+
+/**
+ * Start the "thinking" spinner: "Beaming... (thought for Xs)" in red.
+ */
+export function spinnerStartThinking() {
+  spinnerStart('Thinking...', c.magenta, { thinking: true });
 }
 
 /**

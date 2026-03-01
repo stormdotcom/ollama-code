@@ -172,6 +172,46 @@ export async function checkCommandPermission(command, cwd) {
   return await confirmCommand(command, cwd);
 }
 
+/**
+ * Extract a smart rule from a command string.
+ * - "git status" → "Bash(git:*)"  (save the base tool)
+ * - "npm install express" → "Bash(npm install:*)"  (save two-word commands)
+ * - "node --check src/index.js" → "Bash(node --check:*)"
+ * - "python script.py" → "Bash(python:*)"
+ * - "ls -la" → "Bash(ls:*)"
+ *
+ * Heuristic: keep the first word as the base. If the second word looks like
+ * a subcommand (not a flag, not a path), include it.
+ */
+function extractCommandRule(command) {
+  const parts = command.trim().split(/\s+/);
+  if (parts.length === 0) return null;
+  const base = parts[0];
+
+  // Well-known multi-word commands where the 2nd token is a subcommand
+  const MULTI_WORD_CMDS = new Set([
+    'git', 'npm', 'npx', 'yarn', 'pnpm', 'pip', 'pip3',
+    'docker', 'kubectl', 'cargo', 'go', 'dotnet',
+    'systemctl', 'brew', 'apt', 'apt-get', 'dnf', 'yum',
+    'conda', 'poetry', 'bun',
+  ]);
+
+  if (parts.length >= 2 && MULTI_WORD_CMDS.has(base)) {
+    const sub = parts[1];
+    // Only include if it looks like a subcommand (not a flag or path)
+    if (!sub.startsWith('-') && !sub.startsWith('/') && !sub.startsWith('.') && !sub.includes('\\')) {
+      return `Bash(${base} ${sub}:*)`;
+    }
+  }
+
+  // If the second word starts with -- or -, include it (e.g. "node --check")
+  if (parts.length >= 2 && parts[1].startsWith('-')) {
+    return `Bash(${base} ${parts[1]}:*)`;
+  }
+
+  return `Bash(${base}:*)`;
+}
+
 async function confirmCommand(command, cwd) {
   console.log('');
   console.log(`${c.yellow}${c.bold}  ⚠  Command approval required${c.reset}`);
@@ -179,33 +219,47 @@ async function confirmCommand(command, cwd) {
   console.log(`  ${c.white}${command}${c.reset}`);
   console.log(`${c.gray}  ──────────────────────────────────${c.reset}`);
 
+  const suggestedRule = extractCommandRule(command);
+
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) =>
-    rl.question(`  ${c.yellow}Allow? ${c.green}[1] yes${c.reset} / ${c.red}[2] no${c.reset} / ${c.cyan}[3] always${c.reset} / ${c.magenta}[4] save rule${c.reset} (or y/n/a/s): `, resolve)
+    rl.question(
+      `  ${c.yellow}Allow?${c.reset} ` +
+      `${c.green}[y]${c.reset} yes once  ` +
+      `${c.cyan}[a]${c.reset} always ${c.gray}(save ${suggestedRule})${c.reset}  ` +
+      `${c.magenta}[!]${c.reset} all cmds  ` +
+      `${c.red}[n]${c.reset} no: `,
+      resolve
+    )
   );
   rl.close();
   const trimmed = (answer || '').trim().toLowerCase();
 
-  if (trimmed === 's' || trimmed === 'save' || trimmed === '4') {
-    // Auto-detect the prefix and save as Bash(prefix:*)
-    const prefix = command.split(/\s+/)[0];
-    const rule = `Bash(${prefix}:*)`;
-    addAllowRule(cwd, rule);
-    console.log(style_success(`  Saved rule: ${rule}`));
+  // [a] or "always" — save rule to settings.json for this and future sessions
+  if (trimmed === 'a' || trimmed === 'always') {
+    if (suggestedRule) {
+      addAllowRule(cwd, suggestedRule);
+      console.log(`  ${c.green}✓ Saved rule:${c.reset} ${c.bold}${suggestedRule}${c.reset} ${c.gray}→ .ollama-code/settings.json${c.reset}`);
+    }
     return { approved: true, source: 'saved-rule' };
   }
 
-  if (trimmed === 'a' || trimmed === 'always' || trimmed === '3') {
+  // [!] — approve ALL commands for this session (not saved to disk)
+  if (trimmed === '!' || trimmed === 'all') {
     autoApproveCommands = true;
+    console.log(`  ${c.yellow}All commands auto-approved for this session${c.reset}`);
     return { approved: true, always: true, source: 'session-always' };
   }
 
-  const approved = trimmed === 'y' || trimmed === 'yes' || trimmed === '1';
+  // [y] or Enter — approve once, no rule saved
+  const approved = trimmed === '' || trimmed === 'y' || trimmed === 'yes' || trimmed === '1';
   const denied = trimmed === 'n' || trimmed === 'no' || trimmed === '2';
-  return { approved: approved && !denied, source: approved ? 'user-yes' : 'user-no' };
-}
 
-function style_success(text) { return `${c.green}${text}${c.reset}`; }
+  if (approved && !denied) {
+    return { approved: true, source: 'user-yes' };
+  }
+  return { approved: false, source: 'user-no' };
+}
 
 export function getAutoApproveCommands() { return autoApproveCommands; }
 export function setAutoApproveCommands(val) { autoApproveCommands = val; }

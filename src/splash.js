@@ -1,3 +1,20 @@
+import { networkInterfaces } from 'os';
+
+/** Get the first non-internal IPv4 LAN address. */
+export function getLanAddress() {
+  try {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const net of nets[name]) {
+        if (net.family === 'IPv4' && !net.internal) {
+          return net.address;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return '127.0.0.1';
+}
+
 /** ANSI escape codes — zero dependencies. */
 export const c = {
   reset: '\x1b[0m',
@@ -27,6 +44,8 @@ const W = 52;
 const bar = c.magenta + '━'.repeat(W) + c.reset;
 
 export function printSplash(model, version) {
+  const lanIp = getLanAddress();
+  const port = process.env.OLLAMA_CODE_SERVE_PORT || '3141';
   console.log('');
   console.log(bar);
   console.log(c.brightWhite + c.bold + `
@@ -37,17 +56,18 @@ export function printSplash(model, version) {
   ╚██████╔╝███████╗███████╗██║  ██║██║ ╚═╝ ██║██║  ██║
    ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚═╝  ╚═╝
 ` + c.reset);
-  console.log(c.magenta + c.bold + '          C O D E   C L I' + c.reset);
+  console.log(c.magenta + c.bold + '          C O D E   C L I' + c.reset + `  ${c.brightCyan}${c.bold}v${version}${c.reset}`);
   console.log(c.gray + '     Local-First Agentic Coding with Ollama' + c.reset);
   console.log(bar);
   console.log('');
   console.log(`  ${c.cyan}Model   ${c.reset}${c.bold}${model}${c.reset}`);
-  console.log(`  ${c.cyan}Version ${c.reset}${c.gray}${version} (Local-First Custom Fork)${c.reset}`);
+  console.log(`  ${c.cyan}Version ${c.reset}${c.brightCyan}${c.bold}${version}${c.reset} ${c.gray}(Local-First Custom Fork)${c.reset}`);
   console.log(`  ${c.cyan}Server  ${c.reset}${c.gray}${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}${c.reset}`);
-  console.log(`  ${c.cyan}LAN UI  ${c.reset}${c.gray}ollama-code --serve  →  http://<your-ip>:3141${c.reset}`);
+  console.log(`  ${c.cyan}LAN UI  ${c.reset}${c.gray}ollama-code --serve  →  ${c.reset}${c.underline}http://${lanIp}:${port}${c.reset}`);
   console.log('');
   console.log(`  ${c.green}Type a task${c.reset} or use ${c.yellow}/help${c.reset} for commands.`);
   console.log(`  ${c.gray}Tools: read_file, write_file, edit_file, execute_command, search_code, list_files${c.reset}`);
+  console.log(`  ${c.dim}(Press Ctrl+D or type /exit to quit)${c.reset}`);
   console.log(bar);
   console.log('');
 }
@@ -81,7 +101,11 @@ export function printHelp() {
   console.log(`  ${c.yellow}/search <query>${c.reset}    Semantic search your codebase`);
   console.log(`  ${c.yellow}/rag${c.reset}               Toggle RAG context injection on/off`);
   console.log('');
-  console.log(`  ${c.magenta}${c.bold}Security${c.reset}`);
+  console.log(`  ${c.magenta}${c.bold}Security & Permissions${c.reset}`);
+  console.log(`  ${c.gray}  When a command needs approval:${c.reset}`);
+  console.log(`  ${c.gray}    ${c.green}[y]${c.reset}${c.gray} yes once  ${c.cyan}[a]${c.reset}${c.gray} always (save rule)  ${c.magenta}[!]${c.reset}${c.gray} all cmds  ${c.red}[n]${c.reset}${c.gray} deny${c.reset}`);
+  console.log(`  ${c.gray}  Rules saved to .ollama-code/settings.json persist across sessions${c.reset}`);
+  console.log('');
   console.log(`  ${c.yellow}/permissions${c.reset}       Show current permission levels`);
   console.log(`  ${c.yellow}/settings${c.reset}          Show .ollama-code/settings.json rules`);
   console.log(`  ${c.yellow}/allow <rule>${c.reset}      Add allow rule (e.g. /allow Bash(git:*))`);
@@ -164,4 +188,31 @@ export const style = {
   prompt() { return `${c.green}${c.bold}You: ${c.reset}`; },
   thinking() { return `${c.magenta}${c.dim}Thinking...${c.reset}`; },
   modelLabel(model) { return `${c.cyan}[${model}]${c.reset}`; },
+};
+
+// ── CLI look & feel (agent-style bullets, status, running command) ─────────
+export const cliTheme = {
+  /** Bullet for agent line (e.g. "• Model (working)") */
+  bullet: '•',
+  /** Green bullet for active/running process */
+  bulletActive() { return `${c.green}•${c.reset}`; },
+  /** Nested status line: "  L Message (shortcuts)" */
+  statusLine(msg, shortcuts = '') {
+    const suffix = shortcuts ? ` ${c.dim}· ${shortcuts}${c.reset}` : '';
+    return `  ${c.gray}L${c.reset} ${msg}${suffix}`;
+  },
+  /** Running command line: ":. Running command... <cmd> [duration]s" */
+  runningCommand(cmd, durationSec = null) {
+    const cmdShort = (cmd || '').trim().split('\n')[0].slice(0, 72);
+    const duration = durationSec != null ? ` ${c.gray}${durationSec}s${c.reset}` : '';
+    return `  ${c.cyan}:.${c.reset} ${c.dim}Running command...${c.reset} ${cmdShort}${duration}`;
+  },
+  /** Footer when task is running */
+  taskFooter(taskName = 'Task') {
+    return `  ${c.gray}${taskName} (running) · Ctrl+C to interrupt${c.reset}`;
+  },
+  /** First-line prefix for assistant (bullet + model) */
+  assistantPrefix(model) {
+    return `${c.green}•${c.reset} ${c.cyan}[${model}]${c.reset} `;
+  },
 };
