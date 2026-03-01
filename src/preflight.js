@@ -27,10 +27,30 @@ export async function checkOllamaRunning() {
 }
 
 /**
- * Check if the given model name exists in the tags list (optional validation).
+ * Check if the given model name exists in the tags list.
  */
 export function isModelAvailable(modelName, models) {
   if (!models || models.length === 0) return true;
   const normalized = modelName.split(':')[0];
   return models.some((m) => m === modelName || m.startsWith(normalized + ':'));
+}
+
+/**
+ * Fetch the full model list with sizes from Ollama.
+ * @returns {Promise<Array<{ name: string, size: number }>>}
+ */
+export async function listModels() {
+  try {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data.models)
+      ? data.models.map((m) => ({ name: m.name || m.model, size: m.size || 0 }))
+      : [];
+  } catch {
+    return [];
+  }
 }

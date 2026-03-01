@@ -246,6 +246,82 @@ ollama-code
 
 ---
 
+## CLI commands
+
+Inside the CLI, use these slash commands:
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all commands |
+| `/model <name>` | Switch model mid-session (clears history) |
+| `/models` | List all models pulled in Ollama |
+| `/tools` | List available tools |
+| `/scan <file>` | Scan a file for hardcoded secrets |
+| `/clear` | Clear conversation history |
+| `/exit` | Quit (also `/quit`, `/q`, `exit`, `quit`, `q`) |
+
+---
+
+## Security
+
+### Command approval
+
+Every `<execute_command>` the model produces requires your approval before it runs. You'll see the command and can choose:
+- **y** (yes, run it)
+- **n** (no, deny)
+- **a** (always, auto-approve for this session)
+
+### Blocked commands
+
+Dangerous commands are blocked outright and never reach your shell (e.g. `rm -rf /`, `format C:`, `shutdown`, `Invoke-Expression`, `mimikatz`, and more). The full list is in `src/security.js`.
+
+### Path sandbox
+
+File tools (`read_file`, `write_file`, `edit_file`) cannot escape your working directory. Paths with `..` or absolute paths outside `cwd` are denied.
+
+### Secret scanner
+
+Files written or edited are automatically scanned for hardcoded secrets (AWS keys, GitHub tokens, private keys, connection strings, etc.). You can also scan manually with `/scan <file>`.
+
+---
+
+## PowerShell personas (aliases)
+
+Add these to your `$PROFILE` to launch with different models for different tasks:
+
+```powershell
+# Hacking persona: payload / exploit generation (uncensored)
+function h-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model dolphin-mistral $args }
+
+# Reasoning persona: logic / binary analysis
+function r-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model deepseek-r1:7b $args }
+
+# Dev persona: high-accuracy coding
+function d-code { node "D:\code\future-tools\ollama-code\bin\ollama-code.js" --model llama2-uncensored $args }
+```
+
+Then use:
+
+```powershell
+h-code    # starts with dolphin-mistral
+r-code    # starts with deepseek-r1:7b
+d-code    # starts with llama2-uncensored
+```
+
+You can also switch models mid-session with `/model dolphin-mistral`.
+
+### Bash aliases (macOS / Linux)
+
+Add to `~/.bashrc` or `~/.zshrc`:
+
+```bash
+alias h-code='node /path/to/ollama-code/bin/ollama-code.js --model dolphin-mistral'
+alias r-code='node /path/to/ollama-code/bin/ollama-code.js --model deepseek-r1:7b'
+alias d-code='node /path/to/ollama-code/bin/ollama-code.js --model llama2-uncensored'
+```
+
+---
+
 ## Plugins
 
 This repository includes plugins that extend the CLI with custom commands and agents. See the [plugins directory](./plugins/README.md) for documentation.
