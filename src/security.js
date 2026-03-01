@@ -158,13 +158,13 @@ export async function checkCommandPermission(command, cwd) {
 
   // Settings allow rules
   if (settingsResult === 'allow') {
-    console.log(`  ${c.green}auto-allowed (settings):${c.reset} ${c.white}${command}${c.reset}`);
+    console.log(`  ${c.green}✓${c.reset} ${c.gray}${command}${c.reset}`);
     return { approved: true, source: 'settings-allow' };
   }
 
   // Session-level auto-approve
   if (autoApproveCommands) {
-    console.log(`  ${c.yellow}auto-approved (session):${c.reset} ${c.white}${command}${c.reset}`);
+    console.log(`  ${c.yellow}✓${c.reset} ${c.gray}${command}${c.reset}`);
     return { approved: true, source: 'session-always' };
   }
 

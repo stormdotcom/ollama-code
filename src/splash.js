@@ -86,7 +86,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/clear${c.reset}             Clear conversation history`);
   console.log('');
   console.log(`  ${c.magenta}${c.bold}Sessions${c.reset} ${c.gray}(MongoDB or file-based fallback)${c.reset}`);
-  console.log(`  ${c.yellow}/session${c.reset}            Show current session ID and LAN URL`);
+  console.log(`  ${c.yellow}/session${c.reset}           Show current session ID and LAN URL`);
   console.log(`  ${c.yellow}/save [name]${c.reset}       Save current session`);
   console.log(`  ${c.yellow}/pause [name]${c.reset}      Save and pause (resume later with /resume)`);
   console.log(`  ${c.yellow}/sessions${c.reset}          List saved sessions`);

@@ -734,7 +734,6 @@ export async function runCli(argv) {
               console.log(`  ${c.red}${compactErr.message}${c.reset}`);
               console.log(`  ${c.gray}Conversation unchanged. Try /clear to start fresh.${c.reset}`);
             }
-            console.log(`  ${c.gray}Use "/compact display" to toggle output visibility instead.${c.reset}`);
             return;
           }
 
