@@ -2,7 +2,7 @@
  * Parse XML-like tool tags from assistant response.
  * Returns array of { tag, innerText } for each top-level tool tag.
  */
-const TAG_NAMES = ['read_file', 'write_file', 'edit_file', 'execute_command', 'search_code', 'scan_secrets'];
+const TAG_NAMES = ['read_file', 'write_file', 'edit_file', 'execute_command', 'search_code', 'list_files', 'scan_secrets'];
 
 function extractTagContent(text, tagName) {
   const results = [];

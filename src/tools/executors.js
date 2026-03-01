@@ -1,6 +1,6 @@
-import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync, statSync } from 'fs';
 import { spawn } from 'child_process';
-import { join, dirname, resolve, isAbsolute } from 'path';
+import { join, dirname, resolve, isAbsolute, relative } from 'path';
 import { parseWriteFileContent } from './xmlParser.js';
 import {
   checkFilePermission, checkCommandPermission,
@@ -9,6 +9,16 @@ import {
 import { c } from '../splash.js';
 import { spinnerStart, spinnerStop, spinnerUpdate } from '../spinner.js';
 import { COMMAND_TIMEOUT_MS } from '../constants.js';
+
+const SKIP_DIRS = new Set([
+  'node_modules', '.git', '__pycache__', '.next', 'dist', 'build',
+  '.ollama-code', '.vscode', '.idea', 'coverage', 'vendor', '.cache',
+]);
+const CODE_EXTS = /\.(js|ts|jsx|tsx|mjs|cjs|py|rb|go|rs|java|c|cpp|h|hpp|cs|json|yaml|yml|md|txt|html|css|scss|sh|ps1|bat|cmd|env|cfg|ini|toml|sql|xml|graphql|proto|vue|svelte|php|lua|dart|kt|scala|swift)$/i;
+const MAX_FILE_SIZE = 512 * 1024; // skip files > 512KB for search
+
+/** Tools that can safely run in parallel (read-only). */
+export const PARALLEL_SAFE_TOOLS = new Set(['read_file', 'search_code', 'list_files', 'scan_secrets']);
 
 function resolvePath(cwd, filePath) {
   const p = filePath.replace(/\\/g, '/');
@@ -65,16 +75,32 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         if (!existsSync(fullPath)) return `[edit_file] error: file not found: ${filePath}`;
         let content = readFileSync(fullPath, 'utf8');
         const rest = lines.slice(1).join('\n');
-        const searchMatch = /<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>/i.exec(rest);
-        if (searchMatch) {
-          if (!content.includes(searchMatch[1])) return `[edit_file] error: search text not found in ${filePath}`;
-          content = content.replace(searchMatch[1], searchMatch[2]);
+
+        // Support multiple search/replace blocks in one edit
+        const multiPattern = /<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>/gi;
+        let match;
+        let editCount = 0;
+        const allMatches = [];
+        while ((match = multiPattern.exec(rest)) !== null) {
+          allMatches.push({ search: match[1], replace: match[2] });
+        }
+
+        if (allMatches.length > 0) {
+          for (const { search, replace } of allMatches) {
+            if (!content.includes(search)) {
+              return `[edit_file] error: search text not found in ${filePath} (edit #${editCount + 1})`;
+            }
+            content = content.replace(search, replace);
+            editCount++;
+          }
         } else if (rest.trim()) {
           content = content + '\n' + rest.trim();
+          editCount = 1;
         }
+
         writeFileSync(fullPath, content, 'utf8');
         const secrets = scanForSecrets(content, filePath);
-        let result = `[edit_file] updated ${filePath}`;
+        let result = `[edit_file] updated ${filePath} (${editCount} edit(s))`;
         if (secrets.length > 0) {
           if (isUnleashedMode()) {
             result += `\n[SECRET SCAN INFO] ${secrets.length} pattern(s) detected (unleashed mode — informational only)`;
@@ -107,6 +133,14 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         return `[search_code] "${query}" — ${matches.length} file(s):\n${matches.join('\n')}`;
       }
 
+      case 'list_files': {
+        const args = innerText.trim();
+        const pattern = args || '*';
+        const results = listFilesInDir(cwd, pattern, 50);
+        if (results.length === 0) return `[list_files] no files matching "${pattern}"`;
+        return `[list_files] ${results.length} file(s) matching "${pattern}":\n${results.join('\n')}`;
+      }
+
       case 'scan_secrets': {
         const filePath = innerText.trim();
         if (!filePath) return '[scan_secrets] error: no path provided';
@@ -127,29 +161,123 @@ export async function executeToolCall(cwd, { tag, innerText }) {
   }
 }
 
-function searchInDir(dir, pattern, maxFiles) {
+/**
+ * List files matching a glob-like pattern.
+ * Supports: *.js, src/**, *.{ts,tsx}, or plain directory name.
+ */
+function listFilesInDir(cwd, pattern, maxResults) {
   const results = [];
-  const skipDirs = new Set(['node_modules', '.git', '__pycache__', '.next', 'dist', 'build', '.ollama-code']);
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
+
+  // Extract optional directory prefix and extension filter
+  let searchDir = cwd;
+  let extFilter = null;
+
+  if (pattern.includes('/') || pattern.includes('\\')) {
+    const parts = pattern.replace(/\\/g, '/').split('/');
+    const dirParts = [];
+    let lastPart = '';
+    for (const p of parts) {
+      if (p.includes('*') || p.includes('{')) {
+        lastPart = p;
+        break;
+      }
+      dirParts.push(p);
+    }
+    if (dirParts.length > 0) {
+      const subDir = resolve(cwd, dirParts.join('/'));
+      if (existsSync(subDir)) searchDir = subDir;
+    }
+    if (lastPart) {
+      extFilter = patternToRegex(lastPart);
+    }
+  } else if (pattern !== '*' && pattern !== '**') {
+    extFilter = patternToRegex(pattern);
+  }
+
+  function walk(dir, depth) {
+    if (depth > 6 || results.length >= maxResults) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
     for (const entry of entries) {
-      if (results.length >= maxFiles) break;
+      if (results.length >= maxResults) break;
+      if (entry.name.startsWith('.') && entry.name !== '.env') continue;
       const full = join(dir, entry.name);
-      if (entry.isDirectory() && !skipDirs.has(entry.name)) {
-        results.push(...searchInDir(full, pattern, maxFiles - results.length));
-      } else if (entry.isFile() && /\.(js|ts|jsx|tsx|mjs|cjs|py|rb|go|rs|java|c|cpp|h|json|yaml|yml|md|txt|html|css|scss|sh|ps1|bat|cmd|env|cfg|ini|toml)$/i.test(entry.name)) {
+
+      if (entry.isDirectory()) {
+        if (!SKIP_DIRS.has(entry.name)) walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        if (extFilter && !extFilter.test(entry.name)) continue;
+        const rel = relative(cwd, full);
         try {
-          const content = readFileSync(full, 'utf8');
-          if (content.includes(pattern)) {
-            const lineNums = [];
-            content.split('\n').forEach((line, i) => { if (line.includes(pattern)) lineNums.push(i + 1); });
-            results.push(`  ${full} (lines: ${lineNums.slice(0, 5).join(', ')}${lineNums.length > 5 ? '...' : ''})`);
-          }
-        } catch (_) {}
+          const stat = statSync(full);
+          results.push(`  ${rel} (${(stat.size / 1024).toFixed(1)} KB)`);
+        } catch {
+          results.push(`  ${rel}`);
+        }
       }
     }
+  }
+
+  walk(searchDir, 0);
+  return results;
+}
+
+function patternToRegex(pattern) {
+  // Handle {ts,tsx} brace expansion
+  const braceMatch = pattern.match(/\*\.?\{([^}]+)\}/);
+  if (braceMatch) {
+    const exts = braceMatch[1].split(',').map(e => e.trim());
+    return new RegExp(`\\.(${exts.join('|')})$`, 'i');
+  }
+  // Handle *.ext
+  const extMatch = pattern.match(/\*\.(\w+)/);
+  if (extMatch) {
+    return new RegExp(`\\.${extMatch[1]}$`, 'i');
+  }
+  // Handle ** (any file)
+  if (pattern === '**' || pattern === '*') return null;
+  // Plain string — match filename containing it
+  return new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+}
+
+function searchInDir(dir, pattern, maxFiles) {
+  const results = [];
+  try {
+    _searchWalk(dir, pattern, maxFiles, results, 0);
   } catch (_) {}
   return results;
+}
+
+function _searchWalk(dir, pattern, maxFiles, results, depth) {
+  if (depth > 6 || results.length >= maxFiles) return;
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+
+  for (const entry of entries) {
+    if (results.length >= maxFiles) break;
+    const full = join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+        _searchWalk(full, pattern, maxFiles, results, depth + 1);
+      }
+    } else if (entry.isFile() && CODE_EXTS.test(entry.name)) {
+      try {
+        const stat = statSync(full);
+        if (stat.size > MAX_FILE_SIZE) continue; // skip large files
+        const content = readFileSync(full, 'utf8');
+        if (content.includes(pattern)) {
+          const lineNums = [];
+          const lines = content.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(pattern)) lineNums.push(i + 1);
+          }
+          results.push(`  ${full} (lines: ${lineNums.slice(0, 5).join(', ')}${lineNums.length > 5 ? '...' : ''})`);
+        }
+      } catch (_) {}
+    }
+  }
 }
 
 const SPINNER_UPDATE_THROTTLE_MS = 500;

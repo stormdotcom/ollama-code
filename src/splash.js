@@ -47,7 +47,7 @@ export function printSplash(model, version) {
   console.log(`  ${c.cyan}LAN UI  ${c.reset}${c.gray}ollama-code --serve  →  http://<your-ip>:3141${c.reset}`);
   console.log('');
   console.log(`  ${c.green}Type a task${c.reset} or use ${c.yellow}/help${c.reset} for commands.`);
-  console.log(`  ${c.gray}Tools: read_file, write_file, edit_file, execute_command, search_code${c.reset}`);
+  console.log(`  ${c.gray}Tools: read_file, write_file, edit_file, execute_command, search_code, list_files${c.reset}`);
   console.log(bar);
   console.log('');
 }
@@ -63,10 +63,12 @@ export function printHelp() {
   console.log(`  ${c.yellow}/model <name>${c.reset}      Switch model mid-session`);
   console.log(`  ${c.yellow}/models${c.reset}            List models available in Ollama`);
   console.log(`  ${c.yellow}/tools${c.reset}             List available tools`);
-  console.log(`  ${c.yellow}/compact${c.reset}           Toggle compact mode (hide model output)`);
+  console.log(`  ${c.yellow}/compact${c.reset}           Summarize and compress conversation (reclaim context)`);
+  console.log(`  ${c.yellow}/compact display${c.reset}   Toggle compact output mode (hide model output)`);
+  console.log(`  ${c.yellow}/usage${c.reset}             Show token usage and context stats`);
   console.log(`  ${c.yellow}/clear${c.reset}             Clear conversation history`);
   console.log('');
-  console.log(`  ${c.magenta}${c.bold}Sessions (MongoDB)${c.reset}`);
+  console.log(`  ${c.magenta}${c.bold}Sessions${c.reset} ${c.gray}(MongoDB or file-based fallback)${c.reset}`);
   console.log(`  ${c.yellow}/session${c.reset}          Show current session ID (for LAN web view)`);
   console.log(`  ${c.yellow}/save [name]${c.reset}       Save current session`);
   console.log(`  ${c.yellow}/pause [name]${c.reset}      Save and pause (resume later with /resume)`);
@@ -98,6 +100,7 @@ export function printHelp() {
   console.log(`  ${c.cyan}<edit_file>${c.reset}       Edit a file with search/replace`);
   console.log(`  ${c.cyan}<execute_command>${c.reset} Run a shell command ${c.red}(requires approval)${c.reset}`);
   console.log(`  ${c.cyan}<search_code>${c.reset}     Search files for a pattern`);
+  console.log(`  ${c.cyan}<list_files>${c.reset}      List/glob project files`);
   console.log('');
   console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3…${c.reset}`);
   console.log(`  ${c.gray}Tip: You can queue instructions while a task is running.${c.reset}`);
@@ -110,9 +113,10 @@ export function printTools() {
   console.log(`  ${c.magenta}${c.bold}Available Tools${c.reset}`);
   console.log(`  ${c.cyan}read_file${c.reset}        Read file contents`);
   console.log(`  ${c.cyan}write_file${c.reset}       Create / overwrite file`);
-  console.log(`  ${c.cyan}edit_file${c.reset}        Search-and-replace edit`);
+  console.log(`  ${c.cyan}edit_file${c.reset}        Search-and-replace edit (multi-edit supported)`);
   console.log(`  ${c.cyan}execute_command${c.reset}  Shell command ${c.red}(confirm first)${c.reset}`);
   console.log(`  ${c.cyan}search_code${c.reset}      Grep-like code search`);
+  console.log(`  ${c.cyan}list_files${c.reset}       List/glob files (e.g. *.js, src/**)`);
   console.log(`  ${c.cyan}scan_secrets${c.reset}     Scan for hardcoded secrets`);
   console.log('');
 }

@@ -41,7 +41,7 @@ export const COMMAND_TIMEOUT_MS = parseInt(process.env.OLLAMA_CODE_CMD_TIMEOUT |
 export function buildSystemPrompt({ cwd, fileTree, gitInfo, unleashed = false }) {
   let prompt = `You are an agentic coder: a local autonomous coding assistant running on the user's machine via Ollama.
 
-You work in a loop: after each of your responses, the system will run any tool tags you emit (read_file, write_file, edit_file, execute_command, search_code, scan_secrets), then feed the results back to you. You can then reply again with more tool calls or a final answer. Use this loop until the user's task is complete — read what you need, write or edit files, run commands, then confirm or continue. Do not stop after one tool round if the task requires more steps.
+You work in a loop: after each of your responses, the system will run any tool tags you emit (read_file, write_file, edit_file, execute_command, search_code, list_files, scan_secrets), then feed the results back to you. You can then reply again with more tool calls or a final answer. Use this loop until the user's task is complete — read what you need, write or edit files, run commands, then confirm or continue. Do not stop after one tool round if the task requires more steps.
 
 Do NOT repeat the same execute_command in one response or across turns — if a command already ran, use its result. Duplicate commands are skipped.
 
@@ -111,6 +111,10 @@ Run a shell command:
 
 Search files for a pattern:
 <search_code>functionName</search_code>
+
+List files matching a glob pattern:
+<list_files>*.js</list_files>
+<list_files>src/**</list_files>
 
 Scan a file for hardcoded secrets:
 <scan_secrets>path/to/file.js</scan_secrets>

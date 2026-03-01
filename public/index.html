@@ -165,6 +165,15 @@
 
   <script>
     const API = '';
+    // AUTH_TOKEN may be injected by the server. Fallback: read from URL ?token= param.
+    const _authToken = (new URLSearchParams(window.location.search).get('token') || '');
+
+    function authHeaders(extra = {}) {
+      const h = { ...extra };
+      if (_authToken) h['X-Auth-Token'] = _authToken;
+      return h;
+    }
+
     const chat = document.getElementById('chat');
     const input = document.getElementById('input');
     const sendBtn = document.getElementById('send');
@@ -227,7 +236,7 @@
 
     document.getElementById('loadSessions').onclick = async () => {
       try {
-        const res = await fetch(API + '/api/sessions');
+        const res = await fetch(API + '/api/sessions', { headers: authHeaders() });
         const { sessions } = await res.json();
         sessionsDropdown.innerHTML = sessions.length ? sessions.map(s =>
           `<button data-id="${s.sessionId}">${s.name || s.sessionId.slice(0, 8)} — ${s.model}</button>`
@@ -249,7 +258,7 @@
 
     async function loadSession(id) {
       try {
-        const res = await fetch(API + '/api/sessions/' + encodeURIComponent(id));
+        const res = await fetch(API + '/api/sessions/' + encodeURIComponent(id), { headers: authHeaders() });
         if (!res.ok) return;
         const { messages } = await res.json();
         chat.innerHTML = '';
@@ -261,7 +270,7 @@
 
     async function loadModels() {
       try {
-        const res = await fetch(API + '/api/models');
+        const res = await fetch(API + '/api/models', { headers: authHeaders() });
         const { models, current } = await res.json();
         modelSelect.innerHTML = (models || []).map(m =>
           `<option value="${m.name}" ${m.name === current ? 'selected' : ''}>${m.name}</option>`
@@ -293,7 +302,7 @@
       try {
         const res = await fetch(API + '/api/sessions/' + encodeURIComponent(sid) + '/message', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ message: msg, model: modelSelect.value || undefined }),
         });
         if (!res.ok) {

@@ -6,14 +6,15 @@ import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
-import { executeToolCall } from './tools/executors.js';
+import { executeToolCall, PARALLEL_SAFE_TOOLS } from './tools/executors.js';
 import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, isUnleashedMode } from './security.js';
 import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings } from './settings.js';
 import { scanProjectTree } from './projectScanner.js';
 import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool } from './spinner.js';
 import { createStreamFormatter } from './outputFormatter.js';
-import { tryConnect as tryMongoConnect, isConnected as isMongoConnected, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as mongoDisconnect } from './sessionStore.js';
+import { tryConnect as trySessionConnect, isConnected as isSessionConnected, getBackendType, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as sessionDisconnect } from './sessionStore.js';
 import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
+import { estimateTokens, estimateMessagesTokens, createTokenTracker, autoPrune, compactConversation } from './contextManager.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -91,30 +92,31 @@ export async function runCli(argv) {
 
   const workDir = cwd();
 
-  // ── Parallel init: settings + scan (sync) + git + mongo + chroma (async) ──
+  // ── Parallel init: settings + scan (sync) + git + sessions + chroma (async) ──
   spinnerStart('Initializing...', c.cyan);
   const settings = loadSettings(workDir);
   const fileTree = scanProjectTree(workDir);
   const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
 
   const initTasks = [getGitContext()];
-  if (!args.noSessions) initTasks.push(tryMongoConnect());
+  if (!args.noSessions) initTasks.push(trySessionConnect(workDir));
   if (!args.noRag) initTasks.push(tryConnectChroma());
   const results = await Promise.all(initTasks);
   const gitContext = results[0];
-  const mongoOk = args.noSessions ? false : !!results[1];
+  const sessionBackend = args.noSessions ? 'none' : (results[1] || 'none');
   const chromaOk = args.noRag ? false : !!(args.noSessions ? results[1] : results[2]);
 
   const allowRules = settings.permissions?.allow || [];
   const denyRules = settings.permissions?.deny || [];
   const ruleCount = allowRules.length + denyRules.length;
   const gitInfo = formatGitContextForPrompt(gitContext);
+  const sessionsOk = sessionBackend !== 'none';
 
   spinnerStop(
     `${c.green}✓${c.reset} Ready: ${c.bold}${fileCount}${c.reset} files` +
     (ruleCount > 0 ? `, ${ruleCount} rule(s)` : '') +
     (gitInfo ? ', git' : '') +
-    (mongoOk ? ', sessions' : '') +
+    (sessionsOk ? `, sessions (${sessionBackend})` : '') +
     (chromaOk ? ', RAG' : '')
   );
 
@@ -124,12 +126,14 @@ export async function runCli(argv) {
 
   let sessionId = generateSessionId();
   let messages = [];
+  const tokenTracker = createTokenTracker();
+
   function resetMessages() {
     messages = [{ role: 'system', content: systemPrompt }];
   }
 
   // ── Resume session or start fresh ──────────────────────────────────
-  if (args.resume && mongoOk) {
+  if (args.resume && sessionsOk) {
     spinnerStart('Resuming session...', c.cyan);
     const session = await loadSession(args.resume);
     if (session) {
@@ -159,8 +163,8 @@ export async function runCli(argv) {
       console.log(`    ${c.green}✓${c.reset} ${rule}`);
     }
   }
-  if (mongoOk) {
-    console.log(`  ${c.cyan}Session${c.reset}  ${c.gray}${sessionId}${c.reset} ${c.gray}(use /session to copy, view from LAN via --serve)${c.reset}`);
+  if (sessionsOk) {
+    console.log(`  ${c.cyan}Session${c.reset}  ${c.gray}${sessionId}${c.reset} ${c.gray}(${sessionBackend} backend | /session to view)${c.reset}`);
     console.log('');
   }
 
@@ -176,7 +180,7 @@ export async function runCli(argv) {
   rl.on('close', async () => {
     console.log(style.info('\nGoodbye.'));
     await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
-    await mongoDisconnect();
+    await sessionDisconnect();
     process.exit(0);
   });
 
@@ -196,7 +200,7 @@ export async function runCli(argv) {
     });
   }
 
-  let compactMode = args.compact;
+  let compactDisplay = args.compact; // display mode only
   let jobRunning = false;
   const inputQueue = [];
 
@@ -216,7 +220,7 @@ export async function runCli(argv) {
             role: 'user',
             content: `[Relevant code from your project — use as context]\n${ragContext}`,
           });
-          if (!compactMode) {
+          if (!compactDisplay) {
             console.log(`  ${c.cyan}RAG${c.reset} ${c.gray}injected ${ragResults.length} relevant code chunk(s)${c.reset}`);
           }
         }
@@ -224,6 +228,14 @@ export async function runCli(argv) {
     }
 
     messages.push({ role: 'user', content: userInput });
+
+    // ── Auto-prune before sending to model ────────────────────────────
+    const pruneResult = autoPrune(messages);
+    if (pruneResult.pruned) {
+      messages = pruneResult.messages;
+      console.log(`  ${c.yellow}Context pruned${c.reset} ${c.gray}— removed ${pruneResult.prunedCount} old message(s) to fit context window${c.reset}`);
+    }
+
     let iteration = 0;
     let stepNum = 0;
     const turnStart = Date.now();
@@ -237,9 +249,10 @@ export async function runCli(argv) {
       let firstToken = true;
       const abortController = new AbortController();
       const writeOut = (s) => process.stdout.write(s);
-      const formatter = compactMode ? null : createStreamFormatter(writeOut);
+      const formatter = compactDisplay ? null : createStreamFormatter(writeOut);
 
-      spinnerStart(compactMode ? `Step ${stepNum}  Thinking...` : 'Thinking...', c.magenta);
+      const promptTokens = estimateMessagesTokens(messages);
+      spinnerStart(compactDisplay ? `Step ${stepNum}  Thinking...` : 'Thinking...', c.magenta);
 
       const interruptHandler = () => {
         interrupted = true;
@@ -250,7 +263,7 @@ export async function runCli(argv) {
       process.once('SIGINT', interruptHandler);
 
       const onToken = (token) => {
-        if (compactMode) return;
+        if (compactDisplay) return;
         if (firstToken) {
           spinnerStop();
           process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
@@ -284,7 +297,9 @@ export async function runCli(argv) {
         return;
       }
 
-      if (compactMode) {
+      const completionTokens = estimateTokens(turnContent);
+
+      if (compactDisplay) {
         spinnerStop(`${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}Thinking${c.reset}`);
       } else {
         formatter.flush();
@@ -293,44 +308,80 @@ export async function runCli(argv) {
       messages.push({ role: 'assistant', content: turnContent });
 
       const toolCalls = parseToolCalls(turnContent);
+      tokenTracker.addTurn(promptTokens, completionTokens, toolCalls.length);
+
       if (toolCalls.length === 0) break;
 
-      if (!compactMode) {
+      if (!compactDisplay) {
         console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
       }
 
+      // ── Parallel execution for read-only tools ─────────────────────
       const results = [];
       const seenToolCalls = new Map();
-      for (const call of toolCalls) {
-        stepNum++;
-        const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
-        const callKey = `${call.tag}:${call.innerText.trim()}`;
-        let result;
-        if (call.tag === 'execute_command' && seenCommandsThisTurn.has(callKey)) {
-          result = `[execute_command] (skipped — already ran this turn)\n${call.innerText.trim()}`;
-          if (!compactMode) console.log(`  ${c.gray}  (skipped — already ran this turn)${c.reset}`);
-        } else if (seenToolCalls.has(callKey)) {
-          result = seenToolCalls.get(callKey);
-          if (!compactMode) console.log(`  ${c.gray}  (reused — duplicate in same batch)${c.reset}`);
-        } else {
-          spinnerForTool(call.tag, compactMode ? `Step ${stepNum}  ${detail}` : detail);
-          result = await executeToolCall(workDir, call);
-          seenToolCalls.set(callKey, result);
-          if (call.tag === 'execute_command') seenCommandsThisTurn.add(callKey);
-        }
-        const toolLabel = call.tag.replace(/_/g, ' ');
-        spinnerStop(compactMode
-          ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`
-          : `${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
-        if (!compactMode) {
-          console.log(style.toolResult('  ' + result.split('\n')[0]));
-          if (result.split('\n').length > 1) {
-            const extra = result.split('\n').slice(1).join('\n');
-            if (extra.length < 500) console.log(c.gray + extra + c.reset);
-            else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
+
+      // Classify tools into parallel-safe and sequential batches
+      const canParallelize = toolCalls.length > 1 && toolCalls.every(tc => PARALLEL_SAFE_TOOLS.has(tc.tag));
+
+      if (canParallelize) {
+        // All tools are read-only, run in parallel
+        const promises = toolCalls.map(async (call, idx) => {
+          const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+          const callKey = `${call.tag}:${call.innerText.trim()}`;
+          if (seenToolCalls.has(callKey)) {
+            return seenToolCalls.get(callKey);
           }
+          const result = await executeToolCall(workDir, call);
+          seenToolCalls.set(callKey, result);
+          return result;
+        });
+        const parallelResults = await Promise.all(promises);
+        for (let i = 0; i < toolCalls.length; i++) {
+          stepNum++;
+          const call = toolCalls[i];
+          const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+          const toolLabel = call.tag.replace(/_/g, ' ');
+          if (!compactDisplay) {
+            console.log(`${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
+            console.log(style.toolResult('  ' + parallelResults[i].split('\n')[0]));
+          } else {
+            console.log(`  ${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`);
+          }
+          results.push(parallelResults[i]);
         }
-        results.push(result);
+      } else {
+        // Sequential execution (has write/execute tools)
+        for (const call of toolCalls) {
+          stepNum++;
+          const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+          const callKey = `${call.tag}:${call.innerText.trim()}`;
+          let result;
+          if (call.tag === 'execute_command' && seenCommandsThisTurn.has(callKey)) {
+            result = `[execute_command] (skipped — already ran this turn)\n${call.innerText.trim()}`;
+            if (!compactDisplay) console.log(`  ${c.gray}  (skipped — already ran this turn)${c.reset}`);
+          } else if (seenToolCalls.has(callKey)) {
+            result = seenToolCalls.get(callKey);
+            if (!compactDisplay) console.log(`  ${c.gray}  (reused — duplicate in same batch)${c.reset}`);
+          } else {
+            spinnerForTool(call.tag, compactDisplay ? `Step ${stepNum}  ${detail}` : detail);
+            result = await executeToolCall(workDir, call);
+            seenToolCalls.set(callKey, result);
+            if (call.tag === 'execute_command') seenCommandsThisTurn.add(callKey);
+          }
+          const toolLabel = call.tag.replace(/_/g, ' ');
+          spinnerStop(compactDisplay
+            ? `${c.cyan}Step ${stepNum}${c.reset}  ${c.gray}${toolLabel}: ${detail.slice(0, 50)}${c.reset}`
+            : `${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
+          if (!compactDisplay) {
+            console.log(style.toolResult('  ' + result.split('\n')[0]));
+            if (result.split('\n').length > 1) {
+              const extra = result.split('\n').slice(1).join('\n');
+              if (extra.length < 500) console.log(c.gray + extra + c.reset);
+              else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
+            }
+          }
+          results.push(result);
+        }
       }
 
       messages.push({
@@ -343,9 +394,13 @@ export async function runCli(argv) {
       console.log(style.warn(`  (Stopped after ${MAX_TOOL_ITERATIONS} tool iterations)`));
     }
 
-    if (compactMode) {
-      const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
-      console.log(`  ${c.green}Done${c.reset}    ${c.gray}${stepNum} step(s) completed${c.reset} ${c.gray}${elapsed}s${c.reset}\n`);
+    const elapsed = ((Date.now() - turnStart) / 1000).toFixed(1);
+    const currentTokens = estimateMessagesTokens(messages);
+
+    if (compactDisplay) {
+      console.log(`  ${c.green}Done${c.reset}    ${c.gray}${stepNum} step(s) completed${c.reset} ${c.gray}${elapsed}s${c.reset} ${c.gray}(~${currentTokens} ctx tokens)${c.reset}\n`);
+    } else {
+      console.log(`  ${c.gray}── ${elapsed}s · ~${currentTokens} ctx tokens ──${c.reset}\n`);
     }
 
     void autoSave(sessionId, messages, currentModel, {
@@ -413,12 +468,42 @@ export async function runCli(argv) {
           continue;
         }
 
-        case '/compact':
-          compactMode = !compactMode;
-          console.log(compactMode
-            ? `  ${c.cyan}Compact mode ON${c.reset} ${c.gray}— model output hidden, showing progress steps only${c.reset}`
-            : `  ${c.cyan}Compact mode OFF${c.reset} ${c.gray}— full model output visible${c.reset}`);
+        case '/compact': {
+          if (cmdArg === 'display' || cmdArg === 'toggle') {
+            compactDisplay = !compactDisplay;
+            console.log(compactDisplay
+              ? `  ${c.cyan}Compact display ON${c.reset} ${c.gray}— model output hidden, showing progress steps only${c.reset}`
+              : `  ${c.cyan}Compact display OFF${c.reset} ${c.gray}— full model output visible${c.reset}`);
+            continue;
+          }
+          // Default: actually compact/summarize the conversation
+          if (messages.length <= 4) {
+            console.log(`  ${c.gray}Conversation too short to compact.${c.reset}`);
+            continue;
+          }
+          spinnerStart('Compacting conversation...', c.cyan);
+          const beforeCount = messages.length;
+          const beforeTokens = estimateMessagesTokens(messages);
+          const result = await compactConversation(currentModel, messages);
+          if (result.summarized) {
+            messages = result.messages;
+            const afterTokens = estimateMessagesTokens(messages);
+            tokenTracker.addCompaction();
+            spinnerStop(`${c.green}✓${c.reset} Compacted: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
+          } else {
+            // Fall back to prune
+            const pruned = autoPrune(messages, { keepRecent: 6 });
+            if (pruned.pruned) {
+              messages = pruned.messages;
+              const afterTokens = estimateMessagesTokens(messages);
+              spinnerStop(`${c.yellow}!${c.reset} Pruned: ${beforeCount} → ${messages.length} messages, ~${beforeTokens} → ~${afterTokens} tokens`);
+            } else {
+              spinnerStop(`${c.gray}Nothing to compact.${c.reset}`);
+            }
+          }
+          console.log(`  ${c.gray}Use "/compact display" to toggle output visibility instead.${c.reset}`);
           continue;
+        }
 
         case '/clear':
           resetMessages();
@@ -486,17 +571,18 @@ export async function runCli(argv) {
         }
 
         case '/session':
-          if (!isMongoConnected()) {
-            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          if (!isSessionConnected()) {
+            console.log(style.warn('  Sessions not available (no MongoDB or file backend).'));
           } else {
             console.log(`  ${c.cyan}Session ID${c.reset}  ${c.bold}${sessionId}${c.reset}`);
+            console.log(`  ${c.cyan}Backend${c.reset}     ${c.gray}${getBackendType()}${c.reset}`);
             console.log(`  ${c.gray}Use this ID to resume from another device. Run with --serve to view chat from LAN.${c.reset}`);
           }
           continue;
 
         case '/pause': case '/save': {
-          if (!isMongoConnected()) {
-            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          if (!isSessionConnected()) {
+            console.log(style.warn('  Sessions not available.'));
             continue;
           }
           const name = cmdArg || null;
@@ -510,8 +596,8 @@ export async function runCli(argv) {
         }
 
         case '/sessions': {
-          if (!isMongoConnected()) {
-            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          if (!isSessionConnected()) {
+            console.log(style.warn('  Sessions not available.'));
             continue;
           }
           spinnerStart('Loading sessions...', c.cyan);
@@ -521,7 +607,7 @@ export async function runCli(argv) {
             console.log(style.info('  No saved sessions.'));
           } else {
             console.log('');
-            console.log(`  ${c.magenta}${c.bold}Saved Sessions${c.reset}`);
+            console.log(`  ${c.magenta}${c.bold}Saved Sessions${c.reset} ${c.gray}(${getBackendType()})${c.reset}`);
             sessions.forEach((s, i) => {
               const num = `${i + 1}.`;
               const label = s.name || s.sessionId.slice(0, 8);
@@ -537,8 +623,8 @@ export async function runCli(argv) {
         }
 
         case '/resume': {
-          if (!isMongoConnected()) {
-            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          if (!isSessionConnected()) {
+            console.log(style.warn('  Sessions not available.'));
             continue;
           }
           if (!cmdArg) {
@@ -569,8 +655,8 @@ export async function runCli(argv) {
         }
 
         case '/delete-session': {
-          if (!isMongoConnected()) {
-            console.log(style.warn('  MongoDB not connected. Sessions disabled.'));
+          if (!isSessionConnected()) {
+            console.log(style.warn('  Sessions not available.'));
             continue;
           }
           if (!cmdArg) {
@@ -587,6 +673,26 @@ export async function runCli(argv) {
           console.log(deleted
             ? style.success(`  Session deleted.`)
             : style.warn(`  Session not found.`));
+          continue;
+        }
+
+        case '/usage': case '/cost': case '/tokens': {
+          const stats = tokenTracker.getSummary();
+          const currentCtx = estimateMessagesTokens(messages);
+          console.log('');
+          console.log(`  ${c.magenta}${c.bold}Token Usage${c.reset}`);
+          console.log(`  ${c.cyan}Context now:${c.reset}     ~${currentCtx} tokens (of ${c.bold}32768${c.reset} max)`);
+          console.log(`  ${c.cyan}Messages:${c.reset}        ${messages.length}`);
+          console.log(`  ${c.cyan}Total prompt:${c.reset}    ~${stats.promptTokens} tokens`);
+          console.log(`  ${c.cyan}Total response:${c.reset}  ~${stats.completionTokens} tokens`);
+          console.log(`  ${c.cyan}Combined:${c.reset}        ~${stats.totalTokens} tokens`);
+          console.log(`  ${c.cyan}Turns:${c.reset}           ${stats.turns}`);
+          console.log(`  ${c.cyan}Tool calls:${c.reset}      ${stats.toolCalls}`);
+          console.log(`  ${c.cyan}Compactions:${c.reset}     ${stats.compactions}`);
+          const pct = Math.round((currentCtx / 32768) * 100);
+          const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
+          console.log(`  ${c.cyan}Context usage:${c.reset}   [${pct > 80 ? c.red : pct > 60 ? c.yellow : c.green}${bar}${c.reset}] ${pct}%`);
+          console.log('');
           continue;
         }
 

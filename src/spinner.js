@@ -80,6 +80,7 @@ export const ACTION_LABELS = {
   edit_file:        { label: 'Editing file...',      icon: '🔧', color: c.yellow },
   execute_command:  { label: 'Running command...',   icon: '⚡', color: c.magenta },
   search_code:      { label: 'Searching code...',    icon: '🔍', color: c.cyan },
+  list_files:       { label: 'Listing files...',     icon: '📁', color: c.cyan },
   scan_secrets:     { label: 'Scanning secrets...',  icon: '🔒', color: c.red },
 };
 

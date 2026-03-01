@@ -1,7 +1,7 @@
 /**
  * Web server for LAN session control.
  * Serves a mobile-responsive chat UI and streams agent progress via HTTP chunked response.
- * Access from any device on your LAN: http://<host-ip>:3141
+ * Access from any device on your LAN: http://<host-ip>:3141?token=<auth-token>
  */
 import { createServer } from 'http';
 import { networkInterfaces } from 'os';
@@ -9,18 +9,20 @@ import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { cwd } from 'process';
+import { randomBytes } from 'crypto';
 import { SERVE_HOST, SERVE_PORT } from './constants.js';
 import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { streamChat } from './ollamaClient.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
-import { loadSession, listSessions, saveSession, autoSave, tryConnect as tryMongoConnect, isConnected as isMongoConnected, generateSessionId } from './sessionStore.js';
+import { loadSession, listSessions, saveSession, autoSave, tryConnect as trySessionConnect, isConnected as isSessionConnected, generateSessionId } from './sessionStore.js';
 import { loadSettings } from './settings.js';
 import { tryConnectChroma, isChromaConnected, searchRelevant } from './ragIndex.js';
 import { scanProjectTree } from './projectScanner.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { isUncensoredModel, setUnleashedMode, isUnleashedMode, setServeMode } from './security.js';
+import { autoPrune, estimateMessagesTokens } from './contextManager.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MAX_TOOL_ITERATIONS = 10;
@@ -30,11 +32,12 @@ function emit(res, type, data) {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, port: SERVE_PORT, host: SERVE_HOST };
+  const args = { model: DEFAULT_MODEL, port: SERVE_PORT, host: SERVE_HOST, noAuth: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port' && argv[i + 1]) args.port = parseInt(argv[++i], 10);
     if (argv[i] === '--host' && argv[i + 1]) args.host = argv[++i];
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
+    if (argv[i] === '--no-auth') args.noAuth = true;
   }
   return args;
 }
@@ -42,6 +45,9 @@ function parseArgs(argv) {
 export async function runServe(argv) {
   const args = parseArgs(argv);
   setServeMode(true);
+
+  // Generate auth token
+  const authToken = args.noAuth ? null : randomBytes(16).toString('hex');
 
   const workDir = cwd();
   const preflight = await checkOllamaRunning();
@@ -64,19 +70,39 @@ export async function runServe(argv) {
   const gitInfo = formatGitContextForPrompt(gitContext);
   const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
 
-  await tryMongoConnect();
+  await trySessionConnect(workDir);
   tryConnectChroma();
   const ragEnabled = isChromaConnected();
 
   const htmlPath = join(__dirname, '..', 'public', 'index.html');
-  const html = existsSync(htmlPath)
+  let html = existsSync(htmlPath)
     ? readFileSync(htmlPath, 'utf8')
     : '<!DOCTYPE html><html><body><h1>Ollama Code</h1><p>public/index.html not found</p></body></html>';
+
+  // Inject auth token into HTML so the frontend includes it in API calls
+  if (authToken) {
+    html = html.replace(
+      "const API = '';",
+      `const API = '';\n    const AUTH_TOKEN = '${authToken}';`
+    );
+    // Patch fetch calls to include token header
+    html = html.replace(
+      /fetch\(API \+/g,
+      "fetch(API +"
+    );
+  }
+
+  function checkAuth(req, url) {
+    if (!authToken) return true; // --no-auth mode
+    const queryToken = url.searchParams.get('token');
+    const headerToken = req.headers['x-auth-token'];
+    return queryToken === authToken || headerToken === authToken;
+  }
 
   const server = createServer(async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token');
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -87,14 +113,27 @@ export async function runServe(argv) {
     const url = new URL(req.url || '/', `http://${req.headers.host}`);
     const path = url.pathname;
 
+    // Serve HTML (with token in query param for initial access)
     if (path === '/' || path === '/index.html') {
+      if (authToken && !checkAuth(req, url)) {
+        res.writeHead(401, { 'Content-Type': 'text/html' });
+        res.end('<h2>Access denied</h2><p>Append <code>?token=YOUR_TOKEN</code> to the URL. Check the terminal for the token.</p>');
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(html);
       return;
     }
 
+    // All API routes require auth
+    if (path.startsWith('/api/') && !checkAuth(req, url)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unauthorized. Include token as X-Auth-Token header or ?token= query param.' }));
+      return;
+    }
+
     if (path === '/api/sessions' && req.method === 'GET') {
-      if (!isMongoConnected()) {
+      if (!isSessionConnected()) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ sessions: [] }));
         return;
@@ -108,9 +147,9 @@ export async function runServe(argv) {
     const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)\/?$/);
     if (sessionMatch && req.method === 'GET') {
       const sessionId = sessionMatch[1];
-      if (!isMongoConnected()) {
+      if (!isSessionConnected()) {
         res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'MongoDB not connected' }));
+        res.end(JSON.stringify({ error: 'Sessions not available' }));
         return;
       }
       const session = await loadSession(sessionId);
@@ -174,6 +213,14 @@ export async function runServe(argv) {
       }
 
       messages.push({ role: 'user', content: userInput });
+
+      // Auto-prune context
+      const pruneResult = autoPrune(messages);
+      if (pruneResult.pruned) {
+        messages = pruneResult.messages;
+        send('progress', { step: 0, label: `Context pruned (${pruneResult.prunedCount} messages removed)` });
+      }
+
       let iteration = 0;
       let stepNum = 0;
       const turnStart = Date.now();
@@ -218,7 +265,7 @@ export async function runServe(argv) {
       }
 
       const elapsed = (Date.now() - turnStart) / 1000;
-      send('done', { steps: stepNum, elapsed });
+      send('done', { steps: stepNum, elapsed, contextTokens: estimateMessagesTokens(messages) });
       send('messages', { messages });
 
       await autoSave(sessionId, messages, model, {
@@ -257,21 +304,27 @@ export async function runServe(argv) {
       }
     } catch { /* ignore */ }
     const uniqueIps = [...new Set(lanIps)];
+    const tokenParam = authToken ? `?token=${authToken}` : '';
 
     console.log('');
     console.log(`  Ollama Code — LAN Web UI`);
     console.log(`  ─────────────────────────`);
-    console.log(`  Local:   http://localhost:${port}`);
+    console.log(`  Local:   http://localhost:${port}${tokenParam}`);
     if (uniqueIps.length > 0) {
-      uniqueIps.forEach((ip) => console.log(`  LAN:     http://${ip}:${port}`));
+      uniqueIps.forEach((ip) => console.log(`  LAN:     http://${ip}:${port}${tokenParam}`));
     } else {
-      console.log(`  LAN:     http://<your-ip>:${port}  (e.g. 192.168.x.x)`);
+      console.log(`  LAN:     http://<your-ip>:${port}${tokenParam}`);
     }
     console.log(`  Model:   ${currentModel}`);
     console.log(`  CWD:     ${workDir}`);
+    if (authToken) {
+      console.log(`  Auth:    Token-based (use URL above or pass X-Auth-Token header)`);
+      console.log(`  Token:   ${authToken}`);
+    } else {
+      console.log(`  Auth:    DISABLED (--no-auth). Anyone on LAN can access.`);
+    }
     console.log('');
-    console.log(`  Open from phone/tablet on same Wi‑Fi using LAN URL above`);
-    console.log(`  Sessions: use session ID to resume from web chat`);
+    console.log(`  Open from phone/tablet on same Wi-Fi using LAN URL above`);
     console.log('');
   });
 }

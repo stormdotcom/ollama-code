@@ -170,13 +170,18 @@ export async function indexProject(cwd, onProgress) {
       endLine: ch.endLine,
     }));
 
-    const embeddings = [];
-    for (const doc of docs) {
-      try {
-        const emb = await getEmbedding(doc);
-        embeddings.push(emb);
-      } catch {
-        embeddings.push(null);
+    // Batch embeddings in parallel (up to 4 concurrent)
+    const BATCH_SIZE = 4;
+    const embeddings = new Array(docs.length).fill(null);
+    for (let b = 0; b < docs.length; b += BATCH_SIZE) {
+      const batch = docs.slice(b, b + BATCH_SIZE);
+      const batchResults = await Promise.allSettled(
+        batch.map((doc) => getEmbedding(doc))
+      );
+      for (let j = 0; j < batchResults.length; j++) {
+        if (batchResults[j].status === 'fulfilled') {
+          embeddings[b + j] = batchResults[j].value;
+        }
       }
     }
 
