@@ -97,8 +97,14 @@ export async function runCli(argv) {
   console.log(`    ${c.green}✓${c.reset} Write files in workspace    ${c.green}auto-allowed${c.reset}`);
   console.log(`    ${c.green}✓${c.reset} Search code in workspace    ${c.green}auto-allowed${c.reset}`);
   console.log(`    ${c.yellow}?${c.reset} Read/write outside workspace ${c.yellow}prompts you${c.reset}`);
-  console.log(`    ${c.yellow}?${c.reset} Execute shell commands       ${c.yellow}prompts you${c.reset}`);
+  console.log(`    ${c.yellow}?${c.reset} Execute shell commands       ${c.yellow}prompts you (or auto via settings)${c.reset}`);
   console.log(`    ${c.red}✗${c.reset} Dangerous commands           ${c.red}always blocked${c.reset}`);
+  if (allowRules.length > 0) {
+    console.log(`  ${c.cyan}Allow rules:${c.reset}`);
+    for (const rule of allowRules) {
+      console.log(`    ${c.green}✓${c.reset} ${rule}`);
+    }
+  }
   console.log('');
 
   // ── REPL ──────────────────────────────────────────────────────────────
@@ -181,10 +187,49 @@ export async function runCli(argv) {
           console.log(`    ${c.green}✓${c.reset} Write workspace files     ${c.green}auto${c.reset}`);
           console.log(`    ${c.green}✓${c.reset} Search workspace          ${c.green}auto${c.reset}`);
           console.log(`    ${c.yellow}?${c.reset} Outside workspace         ${c.yellow}prompt${c.reset}`);
-          console.log(`    ${c.yellow}?${c.reset} Shell commands             ${c.yellow}prompt${c.reset}`);
+          console.log(`    ${c.yellow}?${c.reset} Shell commands             ${c.yellow}prompt (or auto via settings)${c.reset}`);
           console.log(`    ${c.red}✗${c.reset} Dangerous commands         ${c.red}blocked${c.reset}`);
           console.log(`  ${c.gray}Workspace: ${workDir}${c.reset}`);
-          console.log('');
+          printSettings(workDir);
+          continue;
+
+        case '/settings':
+          printSettings(workDir);
+          continue;
+
+        case '/allow':
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /allow Bash(git:*)${c.reset}`);
+            console.log(`  ${c.gray}       /allow Bash(npm install:*)${c.reset}`);
+            console.log(`  ${c.gray}       /allow Bash(python:*)${c.reset}`);
+            console.log(`  ${c.gray}       /allow Read(*)${c.reset}`);
+            console.log(`  ${c.gray}       /allow Write(src/**)${c.reset}`);
+          } else {
+            addAllowRule(workDir, cmdArg);
+            console.log(style.success(`  Added allow rule: ${cmdArg}`));
+            console.log(style.info(`  Saved to .ollama-code/settings.json`));
+          }
+          continue;
+
+        case '/deny':
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /deny Bash(rm:*)${c.reset}`);
+          } else {
+            const { addDenyRule: addDeny } = await import('./settings.js');
+            addDeny(workDir, cmdArg);
+            console.log(style.success(`  Added deny rule: ${cmdArg}`));
+            console.log(style.info(`  Saved to .ollama-code/settings.json`));
+          }
+          continue;
+
+        case '/revoke':
+          if (!cmdArg) {
+            console.log(`  ${c.gray}Usage: /revoke Bash(git:*)${c.reset}`);
+          } else {
+            removeAllowRule(workDir, cmdArg);
+            console.log(style.success(`  Removed rule: ${cmdArg}`));
+            console.log(style.info(`  Saved to .ollama-code/settings.json`));
+          }
           continue;
 
         default:

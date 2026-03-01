@@ -63,6 +63,10 @@ export function printHelp() {
   console.log(`  ${c.yellow}/models${c.reset}         List models available in Ollama`);
   console.log(`  ${c.yellow}/tools${c.reset}          List available tools`);
   console.log(`  ${c.yellow}/permissions${c.reset}     Show current permission levels`);
+  console.log(`  ${c.yellow}/settings${c.reset}       Show .ollama-code/settings.json rules`);
+  console.log(`  ${c.yellow}/allow <rule>${c.reset}   Add allow rule (e.g. /allow Bash(git:*))`);
+  console.log(`  ${c.yellow}/deny <rule>${c.reset}    Add deny rule`);
+  console.log(`  ${c.yellow}/revoke <rule>${c.reset}  Remove a rule`);
   console.log(`  ${c.yellow}/clear${c.reset}          Clear conversation history`);
   console.log(`  ${c.yellow}/exit${c.reset}           Quit (also: /quit, /q, exit, quit, q)`);
   console.log('');

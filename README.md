@@ -284,6 +284,53 @@ File tools (`read_file`, `write_file`, `edit_file`) cannot escape your working d
 
 Files written or edited are automatically scanned for hardcoded secrets (AWS keys, GitHub tokens, private keys, connection strings, etc.). You can also scan manually with `/scan <file>`.
 
+### Settings file (`.ollama-code/settings.json`)
+
+Create `.ollama-code/settings.json` in your project root to pre-approve or deny specific commands and file operations, similar to Claude Code's `settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(git:*)",
+      "Bash(npm install:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python main.py:*)",
+      "Read(*)",
+      "Write(src/**)"
+    ],
+    "deny": [
+      "Bash(rm:*)"
+    ]
+  }
+}
+```
+
+**Rule format:** `Tool(pattern)` where:
+
+| Tool | Matches |
+|------|---------|
+| `Bash(git:*)` | Any command starting with `git` (e.g. `git status`, `git commit`) |
+| `Bash(npm install:*)` | Any command starting with `npm install` |
+| `Bash(*)` | All commands (use with caution) |
+| `Read(*)` | All file reads (including outside workspace) |
+| `Write(src/**)` | Writes under `src/` |
+
+**Manage rules from the CLI:**
+
+```
+/allow Bash(git:*)          # add an allow rule
+/allow Bash(python:*)       # auto-approve python commands
+/deny Bash(rm:*)            # block rm commands
+/revoke Bash(git:*)         # remove a rule
+/settings                   # show all rules
+/permissions                # show full permission summary
+```
+
+When a command is prompted and you choose **[s]ave rule**, the CLI auto-detects the command prefix and saves a `Bash(prefix:*)` rule to your settings file.
+
 ---
 
 ## Personas (quick-launch aliases)
