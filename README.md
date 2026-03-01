@@ -6,6 +6,21 @@ OLLAMA-CODE-CLI is a **local-first** coding assistant that runs in your terminal
 
 <img src="./demo.gif" alt="Demo" />
 
+## No conflict with existing Claude Code
+
+You can run OLLAMA-CODE-CLI alongside an already installed **Claude Code** without conflicts:
+
+| | Claude Code | OLLAMA-CODE-CLI |
+|---|-------------|------------------|
+| **Command** | `claude` | `ollama-code` |
+| **Config directory** | `.claude/` | `.ollama-code/` (optional; we do not use `.claude`) |
+| **Environment** | Uses `ANTHROPIC_API_KEY`, etc. | Uses only `OLLAMA_BASE_URL` (optional, default `http://localhost:11434`) |
+| **Install location** | Separate (e.g. system path, Cask, WinGet) | This repo or `npm install -g` (different package name) |
+
+We never read or write `.claude/`, and we do not use any Anthropic or Claude-specific environment variables.
+
+---
+
 ## Prerequisites
 
 - **Node.js 18+**

@@ -35,7 +35,7 @@ These plugins are included in the Ollama Code CLI repository. To use them:
    npx ollama-code
    ```
    Or run: `ollama-code` if installed/linked globally.
-3. Use the `/plugin` command to install or configure plugins, or set them in your project's `.claude/settings.json`.
+3. Use the `/plugin` command to install or configure plugins. Plugin settings go in `.ollama-code/settings.json` (we do not use `.claude/`, so Claude Code and Ollama Code CLI configs stay separate).
 
 ## Plugin Structure
 
