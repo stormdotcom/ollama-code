@@ -1,12 +1,12 @@
 # Security Policy
-Thank you for helping us keep Claude Code secure!
+
+Thank you for helping keep Ollama Code CLI secure!
 
 ## Reporting Security Issues
 
-The security of our systems and user data is Anthropic's top priority. We appreciate the work of security researchers acting in good faith in identifying and reporting potential vulnerabilities.
+If you discover a security vulnerability in this project, please report it responsibly:
 
-Our security program is managed on HackerOne and we ask that any validated vulnerability in this functionality be reported through their [submission form](https://hackerone.com/anthropic-vdp/reports/new?type=team&report_type=vulnerability).
+1. **Open a GitHub issue** in this repository with a clear description of the issue, or
+2. **Contact the maintainers** of this fork directly (e.g. via the repository's contact information).
 
-## Vulnerability Disclosure Program
-
-Our Vulnerability Program Guidelines are defined on our [HackerOne program page](https://hackerone.com/anthropic-vdp).
+Please do not disclose security issues publicly until they have been addressed. We appreciate your efforts to help keep this project safe.

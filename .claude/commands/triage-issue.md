@@ -30,7 +30,7 @@ TASK:
 
 **If EVENT is "issues" (new issue):**
 
-4. First, check if this issue is actually about Claude Code (the CLI/IDE tool). Issues about the Claude API, claude.ai, the Claude app, Anthropic billing, or other Anthropic products should be labeled `invalid`. If invalid, apply only that label and stop.
+4. First, check if this issue is actually about Ollama Code CLI (this repo). Issues unrelated to this CLI (e.g. upstream Claude Code, other products) should be labeled `invalid` if applicable. If invalid, apply only that label and stop.
 
 5. Analyze and apply category labels:
    - Type (bug, enhancement, question, etc.)

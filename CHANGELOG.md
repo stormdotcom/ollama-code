@@ -1,5 +1,11 @@
 # Changelog
 
+## Fork: OLLAMA-CODE-CLI (Local-First)
+
+This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `qwen2.5-coder:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
+
+---
+
 ## 2.1.63
 
 - Added `/simplify` and `/batch` bundled slash commands

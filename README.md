@@ -1,72 +1,72 @@
-# Claude Code
+# OLLAMA-CODE-CLI
 
-![](https://img.shields.io/badge/Node.js-18%2B-brightgreen?style=flat-square) [![npm]](https://www.npmjs.com/package/@anthropic-ai/claude-code)
+![](https://img.shields.io/badge/Node.js-18%2B-brightgreen?style=flat-square)
 
-[npm]: https://img.shields.io/npm/v/@anthropic-ai/claude-code.svg?style=flat-square
+OLLAMA-CODE-CLI is a **local-first** coding assistant that runs in your terminal. It uses [Ollama](https://ollama.com) on your machine—no cloud API keys or data leave your computer. It understands your codebase, helps with routine tasks, explains code, and works with git—all through natural language.
 
-Claude Code is an agentic coding tool that lives in your terminal, understands your codebase, and helps you code faster by executing routine tasks, explaining complex code, and handling git workflows -- all through natural language commands. Use it in your terminal, IDE, or tag @claude on Github.
+<img src="./demo.gif" alt="Demo" />
 
-**Learn more in the [official documentation](https://code.claude.com/docs/en/overview)**.
+## Prerequisites
 
-<img src="./demo.gif" />
+- **Node.js 18+**
+- **[Ollama](https://ollama.com)** installed and running locally (e.g. `ollama serve` or the Ollama app)
+
+Pull a coding model before first use, for example:
+
+```bash
+ollama pull qwen2.5-coder:7b
+```
 
 ## Get started
-> [!NOTE]
-> Installation via npm is deprecated. Use one of the recommended methods below.
 
-For more installation options, uninstall steps, and troubleshooting, see the [setup documentation](https://code.claude.com/docs/en/setup).
+1. **Install from source**
 
-1. Install Claude Code:
+   ```bash
+   npm install
+   npm run build
+   ```
 
-    **MacOS/Linux (Recommended):**
-    ```bash
-    curl -fsSL https://claude.ai/install.sh | bash
-    ```
+2. **Run the CLI**
 
-    **Homebrew (MacOS/Linux):**
-    ```bash
-    brew install --cask claude-code
-    ```
+   From your project directory:
 
-    **Windows (Recommended):**
-    ```powershell
-    irm https://claude.ai/install.ps1 | iex
-    ```
+   ```bash
+   npx ollama-code
+   ```
 
-    **WinGet (Windows):**
-    ```powershell
-    winget install Anthropic.ClaudeCode
-    ```
+   Or after linking/installing globally:
 
-    **NPM (Deprecated):**
-    ```bash
-    npm install -g @anthropic-ai/claude-code
-    ```
+   ```bash
+   ollama-code
+   ```
 
-2. Navigate to your project directory and run `claude`.
+3. **Optional: choose a model**
+
+   Default model is `qwen2.5-coder:7b`. Override with `--model`:
+
+   ```bash
+   ollama-code --model deepseek-coder
+   ollama-code --model llama3.1
+   ```
+
+   Use any model you have pulled in Ollama (e.g. `qwen2.5-coder:7b`, `deepseek-v3`, `llama3.1`).
+
+4. **Version**
+
+   ```bash
+   ollama-code --version
+   ```
+
+   Shows the CLI version and identifies this as a **Local-First Custom Fork**.
 
 ## Plugins
 
-This repository includes several Claude Code plugins that extend functionality with custom commands and agents. See the [plugins directory](./plugins/README.md) for detailed documentation on available plugins.
+This repository includes plugins that extend the CLI with custom commands and agents. See the [plugins directory](./plugins/README.md) for documentation.
 
-## Reporting Bugs
+## Reporting bugs
 
-We welcome your feedback. Use the `/bug` command to report issues directly within Claude Code, or file a [GitHub issue](https://github.com/anthropics/claude-code/issues).
+Open a [GitHub issue](https://github.com/your-org/ollama-code/issues) or use the `/bug` command inside the CLI.
 
-## Connect on Discord
+## Privacy
 
-Join the [Claude Developers Discord](https://anthropic.com/discord) to connect with other developers using Claude Code. Get help, share feedback, and discuss your projects with the community.
-
-## Data collection, usage, and retention
-
-When you use Claude Code, we collect feedback, which includes usage data (such as code acceptance or rejections), associated conversation data, and user feedback submitted via the `/bug` command.
-
-### How we use your data
-
-See our [data usage policies](https://code.claude.com/docs/en/data-usage).
-
-### Privacy safeguards
-
-We have implemented several safeguards to protect your data, including limited retention periods for sensitive information, restricted access to user session data, and clear policies against using feedback for model training.
-
-For full details, please review our [Commercial Terms of Service](https://www.anthropic.com/legal/commercial-terms) and [Privacy Policy](https://www.anthropic.com/legal/privacy).
+All processing is **local**. No code or conversation data is sent to the cloud. See [SECURITY.md](./SECURITY.md) for how to report security issues.
