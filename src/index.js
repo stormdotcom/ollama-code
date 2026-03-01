@@ -7,9 +7,10 @@ import { streamChat, chat } from './ollamaClient.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
-import { scanForSecrets, printScanResults } from './security.js';
+import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, isUnleashedMode } from './security.js';
 import { loadSettings, printSettings, addAllowRule, removeAllowRule, getSettings } from './settings.js';
 import { scanProjectTree } from './projectScanner.js';
+import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool } from './spinner.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
@@ -28,10 +29,11 @@ function getVersion() {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, version: false };
+  const args = { model: DEFAULT_MODEL, version: false, unleashed: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' || argv[i] === '-v') args.version = true;
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
+    if (argv[i] === '--unleashed' || argv[i] === '--uncensored') args.unleashed = true;
   }
   return args;
 }
@@ -46,11 +48,14 @@ export async function runCli(argv) {
   }
 
   // ── Preflight ─────────────────────────────────────────────────────────
+  spinnerStart('Connecting to Ollama...', c.cyan);
   const preflight = await checkOllamaRunning();
   if (!preflight.ok) {
+    spinnerStop(`${c.red}✗${c.reset} Connection failed`);
     console.error(style.error(preflight.error));
     process.exit(1);
   }
+  spinnerStop(`${c.green}✓${c.reset} Connected to Ollama`);
 
   let currentModel = args.model;
   if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
@@ -61,29 +66,51 @@ export async function runCli(argv) {
     currentModel = fallback;
   }
 
+  // ── Unleashed mode ──────────────────────────────────────────────────
+  if (args.unleashed || isUncensoredModel(currentModel)) {
+    setUnleashedMode(true);
+  }
+
   // ── Splash ────────────────────────────────────────────────────────────
   printSplash(currentModel, version);
 
-  // ── Load settings ───────────────────────────────────────────────────
-  const workDir = cwd();
-  const settings = loadSettings(workDir);
-  const allowRules = settings.permissions?.allow || [];
-  if (allowRules.length > 0) {
-    console.log(`  ${c.cyan}Settings:${c.reset} ${c.green}${allowRules.length} allow rule(s)${c.reset} loaded from .ollama-code/settings.json`);
+  // ── Unleashed banner ────────────────────────────────────────────────
+  if (isUnleashedMode()) {
+    console.log(`  ${c.magenta}${c.bold}⚡ UNLEASHED MODE${c.reset} ${c.gray}— security research enabled${c.reset}`);
+    console.log(`  ${c.gray}Blocked commands → promptable | Secret scan → informational${c.reset}`);
+    console.log(`  ${c.gray}Exploit, reverse engineering & offensive code allowed${c.reset}`);
+    console.log('');
   }
 
+  // ── Load settings ───────────────────────────────────────────────────
+  const workDir = cwd();
+  spinnerStart('Loading settings...', c.cyan);
+  const settings = loadSettings(workDir);
+  const allowRules = settings.permissions?.allow || [];
+  const denyRules = settings.permissions?.deny || [];
+  const ruleCount = allowRules.length + denyRules.length;
+  spinnerStop(ruleCount > 0
+    ? `${c.green}✓${c.reset} Loaded ${c.bold}${ruleCount}${c.reset} permission rule(s) from .ollama-code/settings.json`
+    : `${c.gray}─${c.reset} No settings file (defaults apply)`);
+
   // ── Project scan ──────────────────────────────────────────────────────
-  console.log(style.info('  Scanning project files...'));
+  spinnerStart('Scanning project files...', c.cyan);
   const fileTree = scanProjectTree(workDir);
   const fileCount = fileTree.split('\n').filter(l => l.trim()).length;
-  console.log(style.success(`  Found ${fileCount} file(s). Model has full project context.\n`));
+  spinnerStop(`${c.green}✓${c.reset} Scanned ${c.bold}${fileCount}${c.reset} file(s) — model has full project context`);
 
   // ── Git context ───────────────────────────────────────────────────────
+  spinnerStart('Loading git context...', c.cyan);
   const gitContext = await getGitContext();
   const gitInfo = formatGitContextForPrompt(gitContext);
+  spinnerStop(gitInfo
+    ? `${c.green}✓${c.reset} Git context loaded`
+    : `${c.gray}─${c.reset} No git repository detected`);
 
   // ── Build system prompt ───────────────────────────────────────────────
-  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo });
+  spinnerStart('Preparing system prompt...', c.magenta);
+  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+  spinnerStop(`${c.green}✓${c.reset} System prompt ready`);
 
   let messages = [];
   function resetMessages() {
@@ -165,6 +192,25 @@ export async function runCli(argv) {
           printShortcuts();
           continue;
 
+        case '/unleash': case '/unleashed': {
+          const wasUnleashed = isUnleashedMode();
+          setUnleashedMode(!wasUnleashed);
+          if (isUnleashedMode()) {
+            console.log(`\n  ${c.magenta}${c.bold}⚡ UNLEASHED MODE ON${c.reset}`);
+            console.log(`  ${c.gray}Blocked commands → promptable | Secret scan → informational${c.reset}`);
+            console.log(`  ${c.gray}Exploit, reverse engineering & offensive code allowed${c.reset}`);
+          } else {
+            console.log(`\n  ${c.green}${c.bold}🔒 UNLEASHED MODE OFF${c.reset}`);
+            console.log(`  ${c.gray}Standard security restrictions restored${c.reset}`);
+          }
+          resetMessages();
+          const newSystemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+          messages = [{ role: 'system', content: newSystemPrompt }];
+          console.log(style.info('  Conversation cleared with new system prompt.'));
+          console.log('');
+          continue;
+        }
+
         case '/clear':
           resetMessages();
           console.log(style.success('  Conversation cleared.'));
@@ -176,13 +222,24 @@ export async function runCli(argv) {
             console.log(`  ${c.gray}Usage: /model <name>  (e.g. /model deepseek-r1:7b)${c.reset}`);
           } else {
             currentModel = cmdArg;
-            resetMessages();
+            const autoUnleash = isUncensoredModel(currentModel);
+            if (autoUnleash && !isUnleashedMode()) {
+              setUnleashedMode(true);
+              console.log(`  ${c.magenta}${c.bold}⚡ Unleashed mode auto-enabled${c.reset} ${c.gray}(uncensored model detected)${c.reset}`);
+            } else if (!autoUnleash && isUnleashedMode()) {
+              setUnleashedMode(false);
+              console.log(`  ${c.green}${c.bold}🔒 Unleashed mode auto-disabled${c.reset} ${c.gray}(standard model)${c.reset}`);
+            }
+            const newSP = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+            messages = [{ role: 'system', content: newSP }];
             console.log(style.success(`  Switched to ${currentModel}. Conversation cleared.`));
           }
           continue;
 
         case '/models': {
+          spinnerStart('Fetching models...', c.cyan);
           const models = await listModels();
+          spinnerStop();
           if (models.length === 0) {
             console.log(style.warn('  No models found. Pull one with: ollama pull <model>'));
           } else {
@@ -204,8 +261,12 @@ export async function runCli(argv) {
           if (!existsSync(fullPath)) {
             console.log(style.error(`  File not found: ${scanPath}`));
           } else {
+            spinnerStart(`Scanning ${scanPath} for secrets...`, c.red);
             const content = readFileSync(fullPath, 'utf8');
             const findings = scanForSecrets(content, scanPath);
+            spinnerStop(findings.length > 0
+              ? `${c.red}✗${c.reset} Found ${findings.length} potential secret(s)`
+              : `${c.green}✓${c.reset} No secrets found`);
             printScanResults(scanPath, findings);
           }
           continue;
@@ -282,26 +343,34 @@ export async function runCli(argv) {
     while (iteration < MAX_TOOL_ITERATIONS) {
       iteration++;
 
-      process.stdout.write(`\n${style.modelLabel(currentModel)} `);
-
       let turnContent = '';
       let interrupted = false;
+      let firstToken = true;
       const abortController = new AbortController();
+
+      spinnerStart('Thinking...', c.magenta);
 
       const interruptHandler = () => {
         interrupted = true;
         abortController.abort();
+        spinnerStop();
         process.stdout.write(`\n${c.yellow}  ⏹ Generation interrupted (Ctrl+C)${c.reset}\n`);
       };
       process.once('SIGINT', interruptHandler);
 
       const onToken = (token) => {
+        if (firstToken) {
+          spinnerStop();
+          process.stdout.write(`\n${style.modelLabel(currentModel)} `);
+          firstToken = false;
+        }
         process.stdout.write(c.magenta + token + c.reset);
       };
 
       try {
         turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
       } catch (err) {
+        spinnerStop();
         if (interrupted) {
           process.removeListener('SIGINT', interruptHandler);
           if (turnContent) {
@@ -333,8 +402,10 @@ export async function runCli(argv) {
 
       const results = [];
       for (const call of toolCalls) {
-        console.log(style.tool(call.tag, c.gray + (call.innerText.split('\n')[0] || '').slice(0, 80) + c.reset));
+        const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+        spinnerForTool(call.tag, detail);
         const result = await executeToolCall(workDir, call);
+        spinnerStop(`${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
         console.log(style.toolResult('  ' + result.split('\n')[0]));
         if (result.split('\n').length > 1) {
           const extra = result.split('\n').slice(1).join('\n');

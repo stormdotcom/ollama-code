@@ -6,6 +6,19 @@ import { checkSettingsPermission, addAllowRule } from './settings.js';
 // ── Session state ───────────────────────────────────────────────────────────
 const approvedPaths = new Set();
 let autoApproveCommands = false;
+let unleashedMode = false;
+
+// Models whose name triggers unleashed mode automatically
+const UNCENSORED_MODEL_PATTERNS = [
+  /dolphin/i, /uncensored/i, /abliterat/i, /wizard.*uncensored/i,
+  /nous.*hermes/i, /openhermes/i,
+];
+
+export function isUnleashedMode() { return unleashedMode; }
+export function setUnleashedMode(val) { unleashedMode = val; }
+export function isUncensoredModel(modelName) {
+  return UNCENSORED_MODEL_PATTERNS.some(p => p.test(modelName));
+}
 
 // ── File permissions ────────────────────────────────────────────────────────
 
@@ -116,9 +129,12 @@ export function isCommandBlocked(command) {
  * Returns { approved: boolean, always?: boolean, source?: string }
  */
 export async function checkCommandPermission(command, cwd) {
-  // Always-blocked patterns
   const blocked = isCommandBlocked(command);
   if (blocked) {
+    if (unleashedMode) {
+      console.log(`  ${c.magenta}${c.bold}UNLEASHED${c.reset} ${c.yellow}Normally blocked command — prompting instead${c.reset}`);
+      return await confirmCommand(command, cwd);
+    }
     console.log(`  ${c.red}${c.bold}BLOCKED${c.reset} ${c.gray}${command}${c.reset}`);
     return { approved: false, source: 'blocked' };
   }

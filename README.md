@@ -6,6 +6,19 @@ OLLAMA-CODE-CLI is a **local-first** coding assistant that runs in your terminal
 
 <img src="./demo.gif" alt="Demo" />
 
+---
+
+## Privacy & Data Sovereignty First
+
+Your code never leaves your environment. Unlike cloud-based AI tools, Ollama Code processes everything locally through your own Ollama server, ensuring:
+
+- **Complete Privacy:** No data transmission to external services
+- **Data Sovereignty:** Full control over your models and processing
+- **Offline Capability:** Work without internet dependency once models are downloaded
+- **Enterprise Ready:** Perfect for sensitive codebases and air-gapped environments
+
+---
+
 ## No conflict with existing Claude Code
 
 You can run OLLAMA-CODE-CLI alongside an already installed **Claude Code** without conflicts:
@@ -101,6 +114,17 @@ ollama-code
 
 **Optional: choose a model** — Default is `deepseek-r1:7b`. Override with `--model` (e.g. `ollama-code --model deepseek-coder`).  
 **Version** — Run `ollama-code --version` (or `node bin/ollama-code.js --version`) to see the version and "Local-First Custom Fork" label.
+
+---
+
+## ⚠️ Quality Considerations
+
+**Important:** This tool uses local Ollama models which may have different capabilities compared to cloud-based models:
+
+- **Smaller models** (7B–14B parameters) may provide less accurate results than larger cloud models
+- **Response quality** varies significantly based on your chosen model and hardware
+- **Complex reasoning tasks** may require larger models (70B+) for optimal results
+- **Consider your use case:** Test with your specific workflows to ensure model suitability
 
 ---
 

@@ -68,6 +68,8 @@ export function printHelp() {
   console.log(`  ${c.yellow}/deny <rule>${c.reset}    Add deny rule`);
   console.log(`  ${c.yellow}/revoke <rule>${c.reset}  Remove a rule`);
   console.log(`  ${c.yellow}/clear${c.reset}          Clear conversation history`);
+  console.log(`  ${c.yellow}/scan <file>${c.reset}    Scan a file for hardcoded secrets`);
+  console.log(`  ${c.yellow}/unleash${c.reset}        Toggle unleashed mode (security research)`);
   console.log(`  ${c.yellow}/shortcuts${c.reset}      Show keyboard shortcuts`);
   console.log(`  ${c.yellow}/exit${c.reset}           Quit (also: /quit, /q, exit, quit, q)`);
   console.log('');

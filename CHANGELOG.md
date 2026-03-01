@@ -4,6 +4,46 @@
 
 This fork replaces cloud API dependencies with local [Ollama](https://ollama.com). All processing runs on your machine. Default model: `deepseek-r1:7b`; use `--model` to override. Requires Ollama running at `http://localhost:11434`. Tool calls use XML tags for local-model compatibility. See README and FORK.md.
 
+### 1.4.0
+
+- Added animated CLI spinner/loader that shows live activity for every async operation
+- Spinner shows contextual labels: "Connecting to Ollama...", "Scanning project files...", "Loading git context...", "Thinking...", "Reading file...", "Writing file...", "Running command...", "Searching code...", etc.
+- Elapsed time shown next to each spinner while active
+- "Thinking..." spinner appears before streaming and auto-clears when the first token arrives
+- Tool execution shows per-tool spinners with icons (📖 Reading, ✏️ Writing, 🔧 Editing, ⚡ Running, 🔍 Searching, 🔒 Scanning)
+- Command execution spinner updates live with output line count
+- Startup sequence now shows step-by-step progress: connect → scan files → load git → load settings → prepare prompt
+- `/models` and `/scan` commands now show spinners while working
+- Version bump to 1.4.0
+
+### 1.3.0
+
+- Added **unleashed mode** for security research, exploit development, and reverse engineering
+- Uncensored models (`dolphin-*`, `*-uncensored`, `abliterated`, etc.) auto-activate unleashed mode
+- In unleashed mode: blocked commands become promptable instead of hard-blocked, secret scan becomes informational
+- System prompt includes explicit permissions for offensive security, exploit code, shellcode, and RE tools
+- Added `--unleashed` / `--uncensored` CLI flags to force unleashed mode with any model
+- Added `/unleash` command to toggle unleashed mode mid-session
+- Switching to an uncensored model via `/model` auto-toggles unleashed mode
+- Version bump to 1.3.0
+
+### 1.2.0
+
+- Added keyboard shortcuts: `Ctrl+C` interrupts active generation, `Ctrl+D` exits cleanly, `Ctrl+L` clears the terminal screen
+- Added `/shortcuts` (also `/keys`, `/keybindings`) command to show all keyboard shortcuts
+- `Ctrl+C` at the idle prompt now shows a hint instead of killing the process
+- Streaming responses support abort via `Ctrl+C` — partial output is preserved in conversation history
+- Updated `/help` to include `/shortcuts` command
+- Updated README with full keyboard shortcuts reference table
+- Version bump to 1.2.0
+
+### 1.1.0
+
+- Added `.ollama-code/settings.json` for persistent allow/deny permission rules
+- Added `/settings`, `/allow`, `/deny`, `/revoke` commands for rule management
+- Command approval prompt now includes `[s]ave rule` option
+- Version bump to 1.1.0
+
 ---
 
 ## 2.1.63

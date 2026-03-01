@@ -4,9 +4,10 @@ import { join, dirname, resolve, isAbsolute } from 'path';
 import { parseWriteFileContent } from './xmlParser.js';
 import {
   checkFilePermission, checkCommandPermission,
-  scanForSecrets, printScanResults,
+  scanForSecrets, printScanResults, isUnleashedMode,
 } from '../security.js';
 import { c } from '../splash.js';
+import { spinnerStart, spinnerStop, spinnerUpdate } from '../spinner.js';
 
 function resolvePath(cwd, filePath) {
   const p = filePath.replace(/\\/g, '/');
@@ -43,7 +44,11 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         const secrets = scanForSecrets(content || '', filePath);
         let result = `[write_file] wrote ${filePath}`;
         if (secrets.length > 0) {
-          result += `\n[SECRET SCAN WARNING] ${secrets.length} potential secret(s) found in ${filePath}`;
+          if (isUnleashedMode()) {
+            result += `\n[SECRET SCAN INFO] ${secrets.length} pattern(s) detected (unleashed mode — informational only)`;
+          } else {
+            result += `\n[SECRET SCAN WARNING] ${secrets.length} potential secret(s) found in ${filePath}`;
+          }
           printScanResults(filePath, secrets);
         }
         return result;
@@ -70,7 +75,11 @@ export async function executeToolCall(cwd, { tag, innerText }) {
         const secrets = scanForSecrets(content, filePath);
         let result = `[edit_file] updated ${filePath}`;
         if (secrets.length > 0) {
-          result += `\n[SECRET SCAN WARNING] ${secrets.length} potential secret(s) found in ${filePath}`;
+          if (isUnleashedMode()) {
+            result += `\n[SECRET SCAN INFO] ${secrets.length} pattern(s) detected (unleashed mode — informational only)`;
+          } else {
+            result += `\n[SECRET SCAN WARNING] ${secrets.length} potential secret(s) found in ${filePath}`;
+          }
           printScanResults(filePath, secrets);
         }
         return result;
@@ -144,12 +153,24 @@ function searchInDir(dir, pattern, maxFiles) {
 
 function runCommand(cwd, command) {
   return new Promise((resolve) => {
+    spinnerStart(`Executing: ${command.slice(0, 50)}...`, c.magenta);
     const proc = spawn(command, [], { cwd, stdio: ['ignore', 'pipe', 'pipe'], shell: true, timeout: 30000 });
     let stdout = '';
     let stderr = '';
-    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stdout.on('data', (d) => {
+      stdout += d.toString();
+      spinnerUpdate(`Running: ${command.slice(0, 40)}... (${stdout.split('\n').length} lines)`);
+    });
     proc.stderr.on('data', (d) => { stderr += d.toString(); });
-    proc.on('close', (code) => resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() }));
-    proc.on('error', (err) => resolve({ code: 1, stdout: '', stderr: err.message }));
+    proc.on('close', (code) => {
+      spinnerStop(code === 0
+        ? `${c.green}✓${c.reset} Command completed`
+        : `${c.yellow}⚠${c.reset} Command exited with code ${code}`);
+      resolve({ code, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+    proc.on('error', (err) => {
+      spinnerStop(`${c.red}✗${c.reset} Command failed`);
+      resolve({ code: 1, stdout: '', stderr: err.message });
+    });
   });
 }
