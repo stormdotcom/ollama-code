@@ -166,6 +166,113 @@ export async function runCli(argv) {
     });
   }
 
+  let jobRunning = false;
+  const inputQueue = [];
+
+  async function runAgenticTurn(userInput) {
+    messages.push({ role: 'user', content: userInput });
+    let iteration = 0;
+    while (iteration < MAX_TOOL_ITERATIONS) {
+      iteration++;
+
+      let turnContent = '';
+      let interrupted = false;
+      let firstToken = true;
+      const abortController = new AbortController();
+      const writeOut = (s) => process.stdout.write(s);
+      const formatter = createStreamFormatter(writeOut);
+
+      spinnerStart('Thinking...', c.magenta);
+
+      const interruptHandler = () => {
+        interrupted = true;
+        abortController.abort();
+        spinnerStop();
+        process.stdout.write(`\n${c.yellow}  ⏹ Generation interrupted (Ctrl+C)${c.reset}\n`);
+      };
+      process.once('SIGINT', interruptHandler);
+
+      const onToken = (token) => {
+        if (firstToken) {
+          spinnerStop();
+          process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
+          firstToken = false;
+        }
+        formatter.push(token);
+      };
+
+      try {
+        turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
+      } catch (err) {
+        spinnerStop();
+        if (interrupted) {
+          process.removeListener('SIGINT', interruptHandler);
+          if (turnContent) {
+            messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
+          }
+          return;
+        }
+        console.log('\n' + style.error('Error: ' + (err.message || err)));
+        messages.pop();
+        process.removeListener('SIGINT', interruptHandler);
+        return;
+      }
+      process.removeListener('SIGINT', interruptHandler);
+
+      if (interrupted) {
+        if (turnContent) {
+          messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
+        }
+        return;
+      }
+
+      formatter.flush();
+      process.stdout.write(c.reset + '\n');
+      messages.push({ role: 'assistant', content: turnContent });
+
+      const toolCalls = parseToolCalls(turnContent);
+      if (toolCalls.length === 0) break;
+
+      console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
+
+      const results = [];
+      for (const call of toolCalls) {
+        const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
+        spinnerForTool(call.tag, detail);
+        const result = await executeToolCall(workDir, call);
+        spinnerStop(`${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
+        console.log(style.toolResult('  ' + result.split('\n')[0]));
+        if (result.split('\n').length > 1) {
+          const extra = result.split('\n').slice(1).join('\n');
+          if (extra.length < 500) console.log(c.gray + extra + c.reset);
+          else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
+        }
+        results.push(result);
+      }
+
+      messages.push({
+        role: 'user',
+        content: `[Tool results]\n${results.join('\n---\n')}`,
+      });
+    }
+
+    if (iteration >= MAX_TOOL_ITERATIONS) {
+      console.log(style.warn(`  (Stopped after ${MAX_TOOL_ITERATIONS} tool iterations)`));
+    }
+  }
+
+  function processQueue() {
+    jobRunning = false;
+    if (inputQueue.length === 0) return;
+    const next = inputQueue.shift();
+    console.log(`  ${c.cyan}Running queued: ${next.slice(0, 60)}${next.length > 60 ? '...' : ''}${c.reset}\n`);
+    jobRunning = true;
+    runAgenticTurn(next).then(processQueue).catch((err) => {
+      console.error(style.error('Queued task failed: ' + (err && err.message)));
+      processQueue();
+    });
+  }
+
   while (true) {
     const userInput = await ask(style.prompt());
     const trimmed = (userInput || '').trim();
@@ -358,96 +465,17 @@ export async function runCli(argv) {
       return;
     }
 
-    // ── Send to model ───────────────────────────────────────────────
-    messages.push({ role: 'user', content: trimmed });
-
-    let iteration = 0;
-    while (iteration < MAX_TOOL_ITERATIONS) {
-      iteration++;
-
-      let turnContent = '';
-      let interrupted = false;
-      let firstToken = true;
-      const abortController = new AbortController();
-      const writeOut = (s) => process.stdout.write(s);
-      const formatter = createStreamFormatter(writeOut);
-
-      spinnerStart('Thinking...', c.magenta);
-
-      const interruptHandler = () => {
-        interrupted = true;
-        abortController.abort();
-        spinnerStop();
-        process.stdout.write(`\n${c.yellow}  ⏹ Generation interrupted (Ctrl+C)${c.reset}\n`);
-      };
-      process.once('SIGINT', interruptHandler);
-
-      const onToken = (token) => {
-        if (firstToken) {
-          spinnerStop();
-          process.stdout.write(`\n\n${style.modelLabel(currentModel)}\n`);
-          firstToken = false;
-        }
-        formatter.push(token);
-      };
-
-      try {
-        turnContent = await streamChat(currentModel, messages, onToken, { signal: abortController.signal });
-      } catch (err) {
-        spinnerStop();
-        if (interrupted) {
-          process.removeListener('SIGINT', interruptHandler);
-          if (turnContent) {
-            messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
-          }
-          break;
-        }
-        console.log('\n' + style.error('Error: ' + (err.message || err)));
-        messages.pop();
-        process.removeListener('SIGINT', interruptHandler);
-        break;
-      }
-      process.removeListener('SIGINT', interruptHandler);
-
-      if (interrupted) {
-        if (turnContent) {
-          messages.push({ role: 'assistant', content: turnContent + '\n[interrupted by user]' });
-        }
-        break;
-      }
-
-      formatter.flush();
-      process.stdout.write(c.reset + '\n');
-      messages.push({ role: 'assistant', content: turnContent });
-
-      const toolCalls = parseToolCalls(turnContent);
-      if (toolCalls.length === 0) break;
-
-      console.log(`${c.gray}  ── executing ${toolCalls.length} tool(s) ──${c.reset}`);
-
-      const results = [];
-      for (const call of toolCalls) {
-        const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 60);
-        spinnerForTool(call.tag, detail);
-        const result = await executeToolCall(workDir, call);
-        spinnerStop(`${c.cyan}${c.bold}[${call.tag}]${c.reset} ${c.gray}${detail}${c.reset}`);
-        console.log(style.toolResult('  ' + result.split('\n')[0]));
-        if (result.split('\n').length > 1) {
-          const extra = result.split('\n').slice(1).join('\n');
-          if (extra.length < 500) console.log(c.gray + extra + c.reset);
-          else console.log(c.gray + extra.slice(0, 500) + '...' + c.reset);
-        }
-        results.push(result);
-      }
-
-      messages.push({
-        role: 'user',
-        content: `[Tool results]\n${results.join('\n---\n')}`,
-      });
+    // ── Queue or run agentic turn ─────────────────────────────────────
+    if (jobRunning) {
+      inputQueue.push(trimmed);
+      console.log(`  ${c.gray}Queued (${inputQueue.length}). Current task still running. Type another or wait.${c.reset}\n`);
+      continue;
     }
 
-    if (iteration >= MAX_TOOL_ITERATIONS) {
-      console.log(style.warn(`  (Stopped after ${MAX_TOOL_ITERATIONS} tool iterations)`));
-    }
+    jobRunning = true;
+    runAgenticTurn(trimmed).then(processQueue).catch((err) => {
+      console.error(style.error('Task failed: ' + (err && err.message)));
+      processQueue();
+    });
   }
 }

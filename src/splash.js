@@ -81,6 +81,7 @@ export function printHelp() {
   console.log(`  ${c.cyan}<search_code>${c.reset}     Search files for a pattern`);
   console.log('');
   console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3… to switch; approval prompts accept 1=yes, 2=no, 3=always, 4=save${c.reset}`);
+  console.log(`  ${c.gray}Tip: You can queue another instruction while a task is running — just type and press Enter; it will run after the current one.${c.reset}`);
   console.log('');
 }
 

@@ -284,6 +284,8 @@ The CLI runs as an **agentic coder**: you describe a task, and the model can use
 
 So the result you get is **agentic**: the model reads files, edits code, and runs commands in your repo by itself, only pausing to ask when a shell command needs your approval.
 
+**Queuing:** You can type and send another instruction while the current task is still running (e.g. while the model is thinking or running tools). It is queued and runs after the current task finishes, in order. Same as Claude CLI: no need to wait for one task to finish before typing the next.
+
 ---
 
 ## CLI commands
