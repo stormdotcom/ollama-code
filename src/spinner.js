@@ -28,8 +28,8 @@ export function spinnerStart(label, color = c.cyan, opts = {}) {
     const spinner = `${c.magenta}${FRAMES[frame % FRAMES.length]}${c.reset}`;
     let text, time;
     if (state.thinking) {
-      text = `${c.red}Beaming...${c.reset}`;
-      time = `${c.gray}(thought for ${elapsed}s)${c.reset}`;
+      text = `${c.magenta}Thinking...${c.reset}`;
+      time = `${c.gray}${elapsed}s${c.reset}`;
     } else {
       text = `${state.color}${state.label}${c.reset}`;
       time = `${c.gray}${elapsed}s${c.reset}`;

@@ -242,35 +242,21 @@ export async function runCli(argv) {
     resetMessages();
   }
 
-  // ── Permission summary ────────────────────────────────────────────────
-  console.log(`  ${c.cyan}Permissions:${c.reset}`);
-  console.log(`    ${c.green}✓${c.reset} Read files in workspace     ${c.green}auto-allowed${c.reset}`);
-  console.log(`    ${c.green}✓${c.reset} Write files in workspace    ${c.green}auto-allowed${c.reset}`);
-  console.log(`    ${c.green}✓${c.reset} Search code in workspace    ${c.green}auto-allowed${c.reset}`);
-  console.log(`    ${c.yellow}?${c.reset} Read/write outside workspace ${c.yellow}prompts you${c.reset}`);
-  console.log(`    ${c.yellow}?${c.reset} Execute shell commands       ${c.yellow}prompts you (or auto via settings)${c.reset}`);
-  console.log(`    ${c.red}✗${c.reset} Dangerous commands           ${c.red}always blocked${c.reset}`);
-  if (allowRules.length > 0) {
-    console.log(`  ${c.cyan}Allow rules:${c.reset}`);
-    for (const rule of allowRules) {
-      console.log(`    ${c.green}✓${c.reset} ${rule}`);
-    }
-  }
+  // ── Startup summary (compact) ────────────────────────────────────────
+  const permParts = [
+    `${c.green}read/write/search${c.reset} auto`,
+    `${c.yellow}commands${c.reset} prompt`,
+  ];
+  if (allowRules.length > 0) permParts.push(`${c.green}${allowRules.length} saved rule(s)${c.reset}`);
+  console.log(`  ${c.cyan}Permissions${c.reset}  ${permParts.join(`${c.gray} · ${c.reset}`)}`);
   if (sessionsOk) {
-    const lanIp = getLanAddress();
-    const lanPort = process.env.OLLAMA_CODE_SERVE_PORT || '3141';
-    console.log(`  ${c.cyan}Session${c.reset}  ${c.gray}${sessionId}${c.reset} ${c.gray}(${sessionBackend} backend | /session to view)${c.reset}`);
-    console.log(`  ${c.cyan}LAN UI${c.reset}   ${c.gray}http://${lanIp}:${lanPort}${c.reset} ${c.gray}(run with --serve to enable)${c.reset}`);
-    console.log('');
+    console.log(`  ${c.cyan}Session${c.reset}      ${c.gray}${sessionId.slice(0, 8)}...${c.reset} ${c.gray}(${sessionBackend})${c.reset}`);
   }
-
-  // ── Shortcuts info ──────────────────────────────────────────────────
-  console.log(`  ${c.gray}Shortcuts: Ctrl+C interrupt, Ctrl+D exit, Ctrl+L clear screen${c.reset}`);
-  console.log(`  ${c.gray}Type /shortcuts for all keyboard shortcuts${c.reset}`);
+  console.log(`  ${c.gray}Ctrl+C interrupt · Ctrl+D exit · /help commands · /shortcuts keys${c.reset}`);
   console.log('');
 
   rl.on('close', async () => {
-    console.log(style.info('\nGoodbye.'));
+    console.log(`\n  ${c.magenta}${c.bold}See you next time.${c.reset} ${c.gray}Session auto-saved.${c.reset}\n`);
     try {
       await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
       await sessionDisconnect();
