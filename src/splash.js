@@ -62,7 +62,7 @@ export function printSplash(model, version) {
   console.log('');
   console.log(`  ${c.cyan}Model  ${c.reset} ${c.bold}${model}${c.reset}`);
   console.log(`  ${c.cyan}Server ${c.reset} ${c.gray}${process.env.OLLAMA_BASE_URL || 'http://localhost:11434'}${c.reset}`);
-  console.log(`  ${c.cyan}LAN    ${c.reset} ${c.underline}http://${lanIp}:${port}${c.reset} ${c.gray}(--serve to enable web UI)${c.reset}`);
+  console.log(`  ${c.cyan}Web UI ${c.reset} ${c.gray}on by default at http://${lanIp}:${port}${c.reset} ${c.dim}(--no-serve to disable, /serve to toggle)${c.reset}`);
   console.log('');
   console.log(`  ${c.green}Type a task${c.reset} or ${c.yellow}/help${c.reset} for commands.  ${c.dim}Ctrl+D to quit.${c.reset}`);
   console.log(bar);
@@ -92,6 +92,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/sessions${c.reset}          List saved sessions`);
   console.log(`  ${c.yellow}/resume <id|#>${c.reset}    Resume a saved session`);
   console.log(`  ${c.yellow}/delete-session${c.reset}    Delete a saved session`);
+  console.log(`  ${c.yellow}/serve${c.reset}             Toggle Web UI (LAN chat) on/off`);
   console.log('');
   console.log(`  ${c.magenta}${c.bold}RAG (ChromaDB)${c.reset}`);
   console.log(`  ${c.yellow}/index${c.reset}             Index project into ChromaDB for semantic search`);
@@ -125,7 +126,7 @@ export function printHelp() {
   console.log('');
   console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3…${c.reset}`);
   console.log(`  ${c.gray}Tip: You can queue instructions while a task is running.${c.reset}`);
-  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>, --serve, --no-sessions, --no-rag${c.reset}`);
+  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>, --no-serve, --no-sessions, --no-rag${c.reset}`);
   console.log('');
 }
 

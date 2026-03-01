@@ -14,6 +14,7 @@ import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool, 
 import { createStreamFormatter } from './outputFormatter.js';
 import { tryConnect as trySessionConnect, isConnected as isSessionConnected, getBackendType, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as sessionDisconnect } from './sessionStore.js';
 import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
+import { startEmbeddedServer, stopEmbeddedServer, isEmbeddedServerRunning, getEmbeddedInfo } from './webServer.js';
 import { estimateTokens, estimateMessagesTokens, createTokenTracker, autoPrune, compactConversation } from './contextManager.js';
 import { readFileSync, existsSync } from 'fs';
 import { fileURLToPath } from 'url';
@@ -33,7 +34,7 @@ function getVersion() {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null, noSessions: false, noRag: false };
+  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null, noSessions: false, noRag: false, noServe: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' || argv[i] === '-v') args.version = true;
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
@@ -42,6 +43,7 @@ function parseArgs(argv) {
     if (argv[i] === '--resume' && argv[i + 1]) args.resume = argv[++i];
     if (argv[i] === '--no-sessions') args.noSessions = true;
     if (argv[i] === '--no-rag') args.noRag = true;
+    if (argv[i] === '--no-serve') args.noServe = true;
   }
   return args;
 }
@@ -253,11 +255,24 @@ export async function runCli(argv) {
     console.log(`  ${c.cyan}Session${c.reset}      ${c.gray}${sessionId.slice(0, 8)}...${c.reset} ${c.gray}(${sessionBackend})${c.reset}`);
   }
   console.log(`  ${c.gray}Ctrl+C interrupt · Ctrl+D exit · /help commands · /shortcuts keys${c.reset}`);
+  if (!args.noServe) {
+    startEmbeddedServer({
+      workDir,
+      systemPrompt: buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() }),
+      currentModel,
+      fileCount,
+      ragEnabled,
+      noAuth: false,
+    }).then((info) => {
+      if (info) console.log(`  ${c.cyan}Web UI${c.reset}      ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
+    });
+  }
   console.log('');
 
   rl.on('close', async () => {
     console.log(`\n  ${c.magenta}${c.bold}See you next time.${c.reset} ${c.gray}Session auto-saved.${c.reset}\n`);
     try {
+      stopEmbeddedServer();
       await autoSave(sessionId, messages, currentModel, { cwd: workDir, unleashed: isUnleashedMode(), fileCount });
       await sessionDisconnect();
     } catch { /* best effort */ }
@@ -742,6 +757,25 @@ export async function runCli(argv) {
             console.log(style.success('  Conversation cleared.'));
             return;
 
+          case '/serve': {
+            if (isEmbeddedServerRunning()) {
+              stopEmbeddedServer();
+              console.log(`  ${c.cyan}Web UI${c.reset} ${c.gray}stopped.${c.reset} ${c.dim}(/serve to start again)${c.reset}`);
+            } else {
+              const info = await startEmbeddedServer({
+                workDir,
+                systemPrompt: buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() }),
+                currentModel,
+                fileCount,
+                ragEnabled,
+                noAuth: false,
+              });
+              if (info) console.log(`  ${c.cyan}Web UI${c.reset} ${c.gray}${info.localUrl}${c.reset} ${c.dim}(/serve to toggle)${c.reset}`);
+              else console.log(style.warn('  Web UI failed to start (port in use?).'));
+            }
+            return;
+          }
+
           case '/model':
             if (!cmdArg) {
               console.log(`  ${c.cyan}Current model:${c.reset} ${c.bold}${currentModel}${c.reset}`);
@@ -1092,21 +1126,37 @@ export async function runCli(argv) {
   }
 
   // ── Event-driven input: always accepts keystrokes ─────────────────
-  // Use readline's 'line' event instead of blocking ask() in the main loop.
-  // This means typing is ALWAYS possible, even during model generation.
-  rl.on('line', (line) => {
-    const trimmed = (line || '').trim();
-    if (!trimmed) {
+  // Coalesce pasted lines into one input (readline emits 'line' per line on paste).
+  const PASTE_DELAY_MS = 80;
+  let pasteBuffer = [];
+  let pasteTimer = null;
+
+  function flushPasteBuffer() {
+    pasteTimer = null;
+    if (pasteBuffer.length === 0) return;
+    const combined = pasteBuffer.map((l) => (l ?? '').trimEnd()).join('\n').trim();
+    pasteBuffer = [];
+    if (!combined) {
       showPrompt();
       return;
     }
-    // Handle input (may be async for slash commands)
-    handleInput(trimmed).then(() => {
+    handleInput(combined).then(() => {
       showPrompt();
     }).catch((err) => {
       showErrorBox('Input handler error', err?.message || err);
       showPrompt();
     });
+  }
+
+  rl.on('line', (line) => {
+    const trimmed = (line || '').trim();
+    if (pasteBuffer.length === 0 && !trimmed) {
+      showPrompt();
+      return;
+    }
+    pasteBuffer.push(line ?? '');
+    if (pasteTimer) clearTimeout(pasteTimer);
+    pasteTimer = setTimeout(flushPasteBuffer, PASTE_DELAY_MS);
   });
 
   // Show the initial prompt
