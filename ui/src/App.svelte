@@ -213,6 +213,16 @@
           </div>
           <h2>Just Imagine...</h2>
           <p>Select a session or start a new one from the CLI.</p>
+
+          {#if $uiState.qrCodeUrl}
+            <div class="welcome-qr">
+              <div class="welcome-qr-card">
+                <img src={$uiState.qrCodeUrl} alt="LAN QR Code" />
+                <p class="welcome-qr-label">Scan to connect from another device</p>
+                <p class="welcome-qr-url">{window.location.href}</p>
+              </div>
+            </div>
+          {/if}
         </div>
       {:else}
         {#each $uiState.messages as msg}
@@ -578,6 +588,39 @@
     color: white;
     margin: 1rem 0 0.5rem 0;
     font-weight: 600;
+  }
+
+  .welcome-qr {
+    margin-top: 2rem;
+  }
+
+  .welcome-qr-card {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-color);
+    border-radius: 1rem;
+    padding: 1.5rem;
+    display: inline-block;
+  }
+
+  .welcome-qr-card img {
+    width: 200px;
+    height: 200px;
+    border-radius: 0.5rem;
+  }
+
+  .welcome-qr-label {
+    margin: 0.75rem 0 0.25rem 0;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+
+  .welcome-qr-url {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--accent-green);
+    word-break: break-all;
+    font-family: "Consolas", "Monaco", monospace;
   }
 
   .message-wrapper {
