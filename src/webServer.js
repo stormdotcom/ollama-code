@@ -17,7 +17,7 @@ import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
 import { streamChat } from './ollamaClient.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
-import { loadSession, listSessions, saveSession, autoSave, tryConnect as trySessionConnect, isConnected as isSessionConnected, generateSessionId } from './sessionStore.js';
+import { loadSession, listSessions, saveSession, autoSave, tryConnect as trySessionConnect, isConnected as isSessionConnected, generateSessionId, deleteSession } from './sessionStore.js';
 import { loadSettings } from './settings.js';
 import { tryConnectChroma, isChromaConnected, searchRelevant } from './ragIndex.js';
 import { scanProjectTree } from './projectScanner.js';
@@ -166,6 +166,29 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(session));
+      return;
+    }
+
+    if (sessionMatch && req.method === 'DELETE') {
+      const sessionId = sessionMatch[1];
+      if (!isSessionConnected()) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Sessions not available' }));
+        return;
+      }
+      if (!checkAuth(req, url)) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+      const success = await deleteSession(sessionId);
+      if (success) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } else {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to delete or not found' }));
+      }
       return;
     }
 
