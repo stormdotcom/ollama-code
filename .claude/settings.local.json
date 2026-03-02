@@ -11,7 +11,9 @@
       "Bash(del /f \"D:\\\\code\\\\future-tools\\\\ollama-code\\\\src\\\\ragIndex.js\")",
       "Bash(netsh advfirewall firewall show rule:*)",
       "Bash(findstr:*)",
-      "Bash(netsh advfirewall show currentprofile:*)"
+      "Bash(netsh advfirewall show currentprofile:*)",
+      "Bash(ipconfig:*)",
+      "Bash(powershell -Command \"Start-Process netsh -ArgumentList ''advfirewall firewall add rule name=\"\"OllamaCode-Port-3141\"\" dir=in action=allow protocol=TCP localport=3141'' -Verb RunAs -Wait\")"
     ]
   }
 }

@@ -401,14 +401,22 @@ function ensureFirewallRule(port) {
     // Check if rule already exists
     execSync(`netsh advfirewall firewall show rule name="${ruleName}"`, { stdio: 'ignore' });
   } catch {
-    // Rule doesn't exist — try to add it (needs admin, fail silently if not)
+    // Rule doesn't exist — try to add it directly first
     try {
       execSync(
         `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${port}`,
         { stdio: 'ignore' }
       );
     } catch {
-      // Not running as admin — skip, user will need to allow manually
+      // Not admin — try via elevated PowerShell (shows UAC prompt)
+      try {
+        execSync(
+          `powershell -Command "Start-Process netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=TCP localport=${port}' -Verb RunAs -Wait"`,
+          { stdio: 'ignore', timeout: 30000 }
+        );
+      } catch {
+        // User declined UAC or timeout — LAN access may not work
+      }
     }
   }
 }
