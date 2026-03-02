@@ -7,7 +7,8 @@
       "Bash(npm install:*)",
       "Bash(wc:*)",
       "Bash(find:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(del /f \"D:\\\\code\\\\future-tools\\\\ollama-code\\\\src\\\\ragIndex.js\")"
     ]
   }
 }

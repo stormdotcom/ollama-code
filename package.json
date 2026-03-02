@@ -15,9 +15,16 @@
     "build": "cd ui && npm run build",
     "version:show": "node bin/ollama-code.js --version"
   },
-  "keywords": ["ollama", "cli", "code", "local", "ai"],
+  "keywords": [
+    "ollama",
+    "cli",
+    "code",
+    "local",
+    "ai"
+  ],
   "license": "MIT",
   "dependencies": {
+    "ollama-code-cli": "file:",
     "qrcode-terminal": "^0.12.0"
   }
 }
