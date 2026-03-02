@@ -24,7 +24,6 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "ollama-code-cli": "file:",
     "qrcode-terminal": "^0.12.0"
   }
 }
