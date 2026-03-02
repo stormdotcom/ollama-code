@@ -19,7 +19,6 @@ import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall } from './tools/executors.js';
 import { loadSession, listSessions, saveSession, autoSave, tryConnect as trySessionConnect, isConnected as isSessionConnected, generateSessionId, deleteSession } from './sessionStore.js';
 import { loadSettings } from './settings.js';
-import { tryConnectChroma, isChromaConnected, searchRelevant } from './ragIndex.js';
 import { scanProjectTree } from './projectScanner.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { isUncensoredModel, setUnleashedMode, isUnleashedMode, setServeMode } from './security.js';
@@ -89,7 +88,7 @@ function emit(res, type, data) {
 
 // ── Shared HTTP server factory ──────────────────────────────────────────────
 
-function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken, onWebActivity }) {
+function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken, onWebActivity }) {
   const htmlPath = join(__dirname, '..', 'public', 'index.html');
   let html = existsSync(htmlPath)
     ? readFileSync(htmlPath, 'utf8')
@@ -296,21 +295,6 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
         }
       };
 
-      if (ragEnabled) {
-        try {
-          const ragResults = await searchRelevant(workDir, userInput, 5);
-          if (ragResults.length > 0) {
-            const ragContext = ragResults
-              .map((r) => `--- ${r.filePath} (lines ${r.startLine}-${r.endLine}) ---\n${r.text}`)
-              .join('\n\n');
-            messages.push({
-              role: 'user',
-              content: `[Relevant code from your project]\n${ragContext}`,
-            });
-          }
-        } catch { /* ignore */ }
-      }
-
       messages.push({ role: 'user', content: userInput });
 
       const pruneResult = autoPrune(messages);
@@ -416,13 +400,13 @@ let embeddedToken = null;
  * Start the web server in the background alongside the CLI.
  * Returns { token, port, url } or null if it fails.
  */
-export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, noAuth = false, onWebActivity = null }) {
+export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, noAuth = false, onWebActivity = null }) {
   if (embeddedServer) return getEmbeddedInfo(); // already running
 
   const authToken = noAuth ? null : randomBytes(16).toString('hex');
   embeddedToken = authToken;
 
-  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken, onWebActivity });
+  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken, onWebActivity });
 
   return new Promise((resolve) => {
     server.on('error', (err) => {
@@ -530,10 +514,8 @@ export async function runServe(argv) {
   const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
 
   await trySessionConnect(workDir);
-  tryConnectChroma();
-  const ragEnabled = isChromaConnected();
 
-  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragEnabled, authToken });
+  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken });
 
   server.listen(args.port, args.host, () => {
     const addr = server.address();

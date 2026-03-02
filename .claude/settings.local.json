@@ -4,7 +4,10 @@
       "Bash(node --check:*)",
       "Bash(node -c:*)",
       "Bash(node -e:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(wc:*)",
+      "Bash(find:*)",
+      "Bash(dir:*)"
     ]
   }
 }

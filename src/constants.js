@@ -16,15 +16,6 @@ export const CONFIG_DIR = '.ollama-code';
 export const DEFAULT_MODEL = process.env.OLLAMA_MODEL || 'deepseek-r1:7b';
 export const NUM_CTX = 32768;
 
-/** MongoDB session storage */
-export const MONGODB_URL = process.env.MONGODB_URL || 'mongodb://localhost:27017';
-export const MONGODB_DB = 'ollama-code';
-
-/** ChromaDB for RAG vector search */
-export const CHROMADB_URL = process.env.CHROMADB_URL || 'http://localhost:8000';
-
-/** Ollama embedding model for RAG */
-export const EMBED_MODEL = process.env.OLLAMA_EMBED_MODEL || 'nomic-embed-text';
 
 /** Web server for LAN session control */
 export const SERVE_HOST = process.env.OLLAMA_CODE_SERVE_HOST || '0.0.0.0';

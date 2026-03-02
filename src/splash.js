@@ -86,7 +86,7 @@ export function printHelp() {
   console.log(`  ${c.yellow}/usage${c.reset}             Show token usage and context stats`);
   console.log(`  ${c.yellow}/clear${c.reset}             Clear conversation history`);
   console.log('');
-  console.log(`  ${c.magenta}${c.bold}Sessions${c.reset} ${c.gray}(MongoDB or file-based fallback)${c.reset}`);
+  console.log(`  ${c.magenta}${c.bold}Sessions${c.reset}`);
   console.log(`  ${c.yellow}/session${c.reset}           Show current session ID and LAN URL`);
   console.log(`  ${c.yellow}/save [name]${c.reset}       Save current session`);
   console.log(`  ${c.yellow}/pause [name]${c.reset}      Save and pause (resume later with /resume)`);
@@ -94,11 +94,6 @@ export function printHelp() {
   console.log(`  ${c.yellow}/resume <id|#>${c.reset}    Resume a saved session`);
   console.log(`  ${c.yellow}/delete-session${c.reset}    Delete a saved session`);
   console.log(`  ${c.yellow}/serve${c.reset}             Toggle Web UI (LAN chat) on/off`);
-  console.log('');
-  console.log(`  ${c.magenta}${c.bold}RAG (ChromaDB)${c.reset}`);
-  console.log(`  ${c.yellow}/index${c.reset}             Index project into ChromaDB for semantic search`);
-  console.log(`  ${c.yellow}/search <query>${c.reset}    Semantic search your codebase`);
-  console.log(`  ${c.yellow}/rag${c.reset}               Toggle RAG context injection on/off`);
   console.log('');
   console.log(`  ${c.magenta}${c.bold}Security & Permissions${c.reset}`);
   console.log(`  ${c.gray}  When a command needs approval:${c.reset}`);
@@ -127,7 +122,7 @@ export function printHelp() {
   console.log('');
   console.log(`  ${c.gray}Tip: Use numbers to choose options — e.g. /models then type 1, 2, 3…${c.reset}`);
   console.log(`  ${c.gray}Tip: You can queue instructions while a task is running.${c.reset}`);
-  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>, --no-serve, --no-sessions, --no-rag${c.reset}`);
+  console.log(`  ${c.gray}Flags: --compact, --model <name>, --unleashed, --resume <id>, --no-serve, --no-sessions${c.reset}`);
   console.log('');
 }
 

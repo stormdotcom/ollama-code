@@ -13,7 +13,6 @@ import { scanProjectTree } from './projectScanner.js';
 import { spinnerStart, spinnerStop, spinnerUpdate, withSpinner, spinnerForTool, spinnerStartThinking } from './spinner.js';
 import { createStreamFormatter } from './outputFormatter.js';
 import { tryConnect as trySessionConnect, isConnected as isSessionConnected, getBackendType, generateSessionId, autoSave, saveSession, loadSession, listSessions, deleteSession, disconnect as sessionDisconnect } from './sessionStore.js';
-import { tryConnectChroma, isChromaConnected, indexProject, searchRelevant } from './ragIndex.js';
 import { startEmbeddedServer, stopEmbeddedServer, isEmbeddedServerRunning, getEmbeddedInfo, printSessionQr, notifySessionUpdated } from './webServer.js';
 import { estimateTokens, estimateMessagesTokens, createTokenTracker, autoPrune, compactConversation } from './contextManager.js';
 import { readFileSync, existsSync } from 'fs';
@@ -34,7 +33,7 @@ function getVersion() {
 }
 
 function parseArgs(argv) {
-  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null, noSessions: false, noRag: false, noServe: false };
+  const args = { model: DEFAULT_MODEL, version: false, unleashed: false, compact: false, resume: null, noSessions: false, noServe: false };
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--version' || argv[i] === '-v') args.version = true;
     if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
@@ -42,7 +41,6 @@ function parseArgs(argv) {
     if (argv[i] === '--compact') args.compact = true;
     if (argv[i] === '--resume' && argv[i + 1]) args.resume = argv[++i];
     if (argv[i] === '--no-sessions') args.noSessions = true;
-    if (argv[i] === '--no-rag') args.noRag = true;
     if (argv[i] === '--no-serve') args.noServe = true;
   }
   return args;
@@ -168,9 +166,9 @@ export async function runCli(argv) {
 
   const workDir = cwd();
 
-  // ── Parallel init: settings + scan (sync) + git + sessions + chroma (async) ──
+  // ── Parallel init: settings + scan (sync) + git + sessions (async) ──
   spinnerStart('Initializing...', c.cyan);
-  let settings, fileTree, fileCount, gitContext, sessionBackend, chromaOk, gitInfo;
+  let settings, fileTree, fileCount, gitContext, sessionBackend, gitInfo;
   try {
     settings = loadSettings(workDir);
     fileTree = scanProjectTree(workDir);
@@ -178,11 +176,9 @@ export async function runCli(argv) {
 
     const initTasks = [getGitContext()];
     if (!args.noSessions) initTasks.push(trySessionConnect(workDir));
-    if (!args.noRag) initTasks.push(tryConnectChroma());
     const results = await Promise.all(initTasks);
     gitContext = results[0];
     sessionBackend = args.noSessions ? 'none' : (results[1] || 'none');
-    chromaOk = args.noRag ? false : !!(args.noSessions ? results[1] : results[2]);
     gitInfo = formatGitContextForPrompt(gitContext);
   } catch (err) {
     spinnerStop(`${c.yellow}⚠${c.reset} Init partially failed`);
@@ -193,7 +189,6 @@ export async function runCli(argv) {
     fileCount = 0;
     gitInfo = '';
     sessionBackend = 'none';
-    chromaOk = false;
   }
 
   const allowRules = settings.permissions?.allow || [];
@@ -205,11 +200,8 @@ export async function runCli(argv) {
     `${c.green}✓${c.reset} Ready: ${c.bold}${fileCount}${c.reset} files` +
     (ruleCount > 0 ? `, ${ruleCount} rule(s)` : '') +
     (gitInfo ? ', git' : '') +
-    (sessionsOk ? `, sessions (${sessionBackend})` : '') +
-    (chromaOk ? ', RAG' : '')
+    (sessionsOk ? `, sessions (${sessionBackend})` : '')
   );
-
-  let ragEnabled = chromaOk;
 
   const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() });
 
@@ -286,7 +278,6 @@ export async function runCli(argv) {
       systemPrompt: buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() }),
       currentModel,
       fileCount,
-      ragEnabled,
       noAuth: false,
       onWebActivity: webActivityToCli,
     }).then(async (info) => {
@@ -406,25 +397,6 @@ export async function runCli(argv) {
 
   async function runAgenticTurn(userInput) {
     seenCommandsThisTurn.clear();
-    // RAG context injection
-    if (ragEnabled && isChromaConnected()) {
-      try {
-        const ragResults = await searchRelevant(workDir, userInput, 5);
-        if (ragResults.length > 0) {
-          const ragContext = ragResults.map((r) =>
-            `--- ${r.filePath} (lines ${r.startLine}-${r.endLine}) ---\n${r.text}`
-          ).join('\n\n');
-          messages.push({
-            role: 'user',
-            content: `[Relevant code from your project — use as context]\n${ragContext}`,
-          });
-          if (!compactDisplay) {
-            console.log(`  ${c.cyan}RAG${c.reset} ${c.gray}injected ${ragResults.length} relevant code chunk(s)${c.reset}`);
-          }
-        }
-      } catch { /* RAG is best-effort */ }
-    }
-
     messages.push({ role: 'user', content: userInput });
 
     // ── Auto-prune before sending to model ────────────────────────────
@@ -818,7 +790,6 @@ export async function runCli(argv) {
                 systemPrompt: buildSystemPrompt({ cwd: workDir, fileTree: fileTree || '', gitInfo: gitInfo || '', unleashed: isUnleashedMode() }),
                 currentModel,
                 fileCount,
-                ragEnabled,
                 noAuth: false,
                 onWebActivity: webActivityToCli,
               });
@@ -1029,67 +1000,6 @@ export async function runCli(argv) {
             console.log('');
             return;
           }
-
-          case '/index': {
-            if (!isChromaConnected()) {
-              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-              return;
-            }
-            spinnerStart('Indexing project into ChromaDB...', c.cyan);
-            try {
-              const result = await indexProject(workDir, (done, total, file) => {
-                if (file !== 'done') spinnerUpdate(`Indexing ${done + 1}/${total}: ${file}`);
-              });
-              spinnerStop(`${c.green}✓${c.reset} Indexed ${c.bold}${result.files}${c.reset} file(s), ${c.bold}${result.chunks}${c.reset} chunk(s) into ChromaDB`);
-            } catch (err) {
-              spinnerStop(`${c.red}✗${c.reset} Indexing failed`);
-              console.log(style.error('  ' + (err.message || err)));
-            }
-            return;
-          }
-
-          case '/search': {
-            if (!isChromaConnected()) {
-              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-              return;
-            }
-            if (!cmdArg) {
-              console.log(`  ${c.gray}Usage: /search <query>  — semantic search your codebase${c.reset}`);
-              return;
-            }
-            spinnerStart('Searching codebase...', c.cyan);
-            try {
-              const results = await searchRelevant(workDir, cmdArg, 5);
-              spinnerStop();
-              if (results.length === 0) {
-                console.log(style.info('  No results found.'));
-              } else {
-                console.log('');
-                console.log(`  ${c.magenta}${c.bold}Search Results${c.reset} ${c.gray}for "${cmdArg}"${c.reset}`);
-                results.forEach((r, i) => {
-                  console.log(`  ${c.cyan}${i + 1}.${c.reset} ${c.white}${r.filePath}${c.reset} ${c.gray}(lines ${r.startLine}-${r.endLine}, dist: ${r.distance.toFixed(3)})${c.reset}`);
-                  const preview = r.text.split('\n').slice(0, 3).join('\n    ');
-                  console.log(`    ${c.gray}${preview}${c.reset}`);
-                });
-                console.log('');
-              }
-            } catch (err) {
-              spinnerStop(`${c.red}✗${c.reset} Search failed`);
-              console.log(style.error('  ' + (err.message || err)));
-            }
-            return;
-          }
-
-          case '/rag':
-            if (!isChromaConnected()) {
-              console.log(style.warn('  ChromaDB not connected. Run: chroma run'));
-              return;
-            }
-            ragEnabled = !ragEnabled;
-            console.log(ragEnabled
-              ? `  ${c.cyan}RAG ON${c.reset} ${c.gray}— relevant code chunks injected before each prompt${c.reset}`
-              : `  ${c.cyan}RAG OFF${c.reset} ${c.gray}— no automatic context injection${c.reset}`);
-            return;
 
           case '/scan': {
             const scanPath = cmdArg || '.';
