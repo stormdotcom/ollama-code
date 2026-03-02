@@ -75,11 +75,11 @@
 <main class="dashboard">
   <!-- Mobile sidebar overlay -->
   {#if sidebarOpen}
-    <div class="sidebar-overlay" on:click={() => (sidebarOpen = false)} on:keydown={() => {}}></div>
+    <div class="sidebar-overlay" role="button" tabindex="-1" on:click={() => (sidebarOpen = false)} on:keydown={() => {}}></div>
   {/if}
 
   <!-- Left Sidebar (Sessions) -->
-  <aside class="sidebar" class:open={sidebarOpen}
+  <aside class="sidebar" class:open={sidebarOpen}>
     <div class="brand">
       <div class="logo-icon">
         <svg
@@ -844,5 +844,93 @@
   }
   :global(.markdown-body h3) {
     font-size: 1.1rem;
+  }
+
+  /* Hamburger — hidden on desktop */
+  .hamburger {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    cursor: pointer;
+    padding: 0.25rem;
+  }
+
+  /* Sidebar overlay — hidden on desktop */
+  .sidebar-overlay {
+    display: none;
+  }
+
+  /* ── Mobile / Tablet ─────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .dashboard {
+      flex-direction: column;
+    }
+
+    /* Sidebar becomes a slide-over drawer */
+    .sidebar {
+      position: fixed;
+      top: 0;
+      left: 0;
+      bottom: 0;
+      width: 280px;
+      z-index: 100;
+      transform: translateX(-100%);
+      transition: transform 0.25s ease;
+    }
+
+    .sidebar.open {
+      transform: translateX(0);
+    }
+
+    .sidebar-overlay {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 99;
+      background: rgba(0, 0, 0, 0.5);
+    }
+
+    .hamburger {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Chat area takes full width */
+    .chat-area {
+      width: 100%;
+      height: 100vh;
+    }
+
+    header {
+      padding: 1rem;
+    }
+
+    .chat-box {
+      padding: 1rem;
+    }
+
+    .input-section {
+      padding: 0.75rem 1rem;
+    }
+
+    .message {
+      max-width: 90%;
+    }
+
+    .benefits-card {
+      max-width: 95%;
+    }
+
+    /* Welcome QR smaller on mobile */
+    .welcome-qr-card {
+      padding: 1rem;
+    }
+
+    .welcome-qr-card img {
+      width: 160px;
+      height: 160px;
+    }
   }
 </style>
