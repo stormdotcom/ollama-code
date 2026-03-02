@@ -1,0 +1,30 @@
+[36mvite v5.4.21 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 3 modules transformed.
+[31mx[39m Build failed in 262ms
+[31merror during build:
+[31m[vite-plugin-svelte] [plugin vite-plugin-svelte] src/App.svelte (13:13): D:/code/future-tools/ollama-code/ui/src/App.svelte:13:13 Unexpected token
+
+- Did you forget to add a TypeScript preprocessor? See https://github.com/sveltejs/vite-plugin-svelte/blob/main/docs/preprocess.md for more information.[31m
+file: [36mD:/code/future-tools/ollama-code/ui/src/App.svelte:13:13[31m
+[33m
+ 11 |  
+ 12 |    let inputMessage = "";
+ 13 |    let chatBox: HTMLElement;
+                    ^
+ 14 |    let showQr = false;
+ 15 |  
+[31m
+ParseError: Unexpected token
+
+- Did you forget to add a TypeScript preprocessor? See https://github.com/sveltejs/vite-plugin-svelte/blob/main/docs/preprocess.md for more information.
+    at error (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/utils/error.js:56:16)
+    at Parser.error (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/index.js:143:3)
+    at Parser.acorn_error (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/index.js:130:8)
+    at Object.read_script [as read] (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/read/script.js:50:10)
+    at tag (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/state/tag.js:203:27)
+    at new Parser (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/index.js:91:12)
+    at parse (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/parse/index.js:268:17)
+    at Module.compile (file:///D:/code/future-tools/ollama-code/ui/node_modules/svelte/src/compiler/compile/index.js:136:14)
+    at compileSvelte (file:///D:/code/future-tools/ollama-code/ui/node_modules/@sveltejs/vite-plugin-svelte/src/utils/compile.js:140:22)
+    at async Object.transform (file:///D:/code/future-tools/ollama-code/ui/node_modules/@sveltejs/vite-plugin-svelte/src/index.js:152:20)[39m
