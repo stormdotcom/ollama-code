@@ -372,6 +372,31 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
       return;
     }
 
+    if (path === '/api/info' && req.method === 'GET') {
+      const addr = server.address();
+      const port = addr?.port || SERVE_PORT;
+      const lanIps = [];
+      try {
+        const nets = networkInterfaces();
+        for (const name of Object.keys(nets)) {
+          for (const net of nets[name] || []) {
+            if (net.family === 'IPv4' && !net.internal) {
+              lanIps.push(net.address);
+            }
+          }
+        }
+      } catch { /* ignore */ }
+      const tokenParam = authToken ? `?token=${authToken}` : '';
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        lanIps: [...new Set(lanIps)],
+        port,
+        lanUrl: lanIps.length > 0 ? `http://${lanIps[0]}:${port}${tokenParam}` : null,
+        localUrl: `http://localhost:${port}${tokenParam}`,
+      }));
+      return;
+    }
+
     // Static file serving from public/
     const filePath = join(PUBLIC_DIR, path);
     if (existsSync(filePath) && !filePath.includes('..')) {

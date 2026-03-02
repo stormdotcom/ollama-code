@@ -14,6 +14,8 @@
   let inputMessage = "";
   let chatBox: HTMLElement;
   let showQr = false;
+  let lanUrl = "";
+  let sidebarOpen = false;
 
   onMount(async () => {
     await fetchSessions();
@@ -21,10 +23,26 @@
       loadSession($uiState.sessions[0].sessionId);
     }
 
-    // Generate QR code for the current URL
+    // Fetch LAN URL from server so QR always points to the LAN address
     try {
-      const url = await QRCode.toDataURL(window.location.href, {
-        color: { dark: "#10b981", light: "#ffffff" }, // Green accent from screenshot
+      const token = new URLSearchParams(window.location.search).get("token");
+      const headers: Record<string, string> = {};
+      if (token) headers["X-Auth-Token"] = token;
+      const infoRes = await fetch("/api/info", { headers });
+      if (infoRes.ok) {
+        const info = await infoRes.json();
+        lanUrl = info.lanUrl || window.location.href;
+      } else {
+        lanUrl = window.location.href;
+      }
+    } catch {
+      lanUrl = window.location.href;
+    }
+
+    // Generate QR code using the LAN URL
+    try {
+      const url = await QRCode.toDataURL(lanUrl, {
+        color: { dark: "#10b981", light: "#ffffff" },
         width: 250,
       });
       uiState.update((s) => ({ ...s, qrCodeUrl: url }));
@@ -55,8 +73,13 @@
 </script>
 
 <main class="dashboard">
+  <!-- Mobile sidebar overlay -->
+  {#if sidebarOpen}
+    <div class="sidebar-overlay" on:click={() => (sidebarOpen = false)} on:keydown={() => {}}></div>
+  {/if}
+
   <!-- Left Sidebar (Sessions) -->
-  <aside class="sidebar">
+  <aside class="sidebar" class:open={sidebarOpen}
     <div class="brand">
       <div class="logo-icon">
         <svg
@@ -158,6 +181,13 @@
   <section class="chat-area">
     <header>
       <div class="header-info">
+        <button class="hamburger" on:click={() => (sidebarOpen = !sidebarOpen)}>
+          <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6"></line>
+            <line x1="3" y1="12" x2="21" y2="12"></line>
+            <line x1="3" y1="18" x2="21" y2="18"></line>
+          </svg>
+        </button>
         <h3>
           {$uiState.currentSessionId ? "Live Session" : "No Session Selected"}
         </h3>
@@ -218,8 +248,8 @@
             <div class="welcome-qr">
               <div class="welcome-qr-card">
                 <img src={$uiState.qrCodeUrl} alt="LAN QR Code" />
-                <p class="welcome-qr-label">Scan to connect from another device</p>
-                <a class="welcome-qr-url" href={window.location.href} target="_blank" rel="noopener noreferrer">{window.location.href}</a>
+                <p class="welcome-qr-label">Scan to open on another device</p>
+                <a class="welcome-qr-url" href={lanUrl} target="_blank" rel="noopener noreferrer">{lanUrl}</a>
               </div>
             </div>
           {/if}
