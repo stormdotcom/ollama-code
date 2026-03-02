@@ -5,12 +5,13 @@
  * Access from any device on your LAN: http://<host-ip>:3141?token=<auth-token>
  */
 import { createServer } from 'http';
-import { networkInterfaces } from 'os';
+import { networkInterfaces, platform } from 'os';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { cwd } from 'process';
 import { randomBytes } from 'crypto';
+import { execSync } from 'child_process';
 import { SERVE_HOST, SERVE_PORT } from './constants.js';
 import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js';
 import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
@@ -391,6 +392,27 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
   return server;
 }
 
+// ── Windows Firewall helper ──────────────────────────────────────────────────
+
+function ensureFirewallRule(port) {
+  if (platform() !== 'win32') return;
+  const ruleName = `OllamaCode-Port-${port}`;
+  try {
+    // Check if rule already exists
+    execSync(`netsh advfirewall firewall show rule name="${ruleName}"`, { stdio: 'ignore' });
+  } catch {
+    // Rule doesn't exist — try to add it (needs admin, fail silently if not)
+    try {
+      execSync(
+        `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${port}`,
+        { stdio: 'ignore' }
+      );
+    } catch {
+      // Not running as admin — skip, user will need to allow manually
+    }
+  }
+}
+
 // ── Embedded server (runs alongside CLI) ────────────────────────────────────
 
 let embeddedServer = null;
@@ -417,6 +439,7 @@ export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileC
 
     server.listen(SERVE_PORT, SERVE_HOST, () => {
       embeddedServer = server;
+      ensureFirewallRule(SERVE_PORT);
       // Prevent the server from keeping Node alive when CLI exits
       server.unref();
       resolve(getEmbeddedInfo());
@@ -520,6 +543,7 @@ export async function runServe(argv) {
   server.listen(args.port, args.host, () => {
     const addr = server.address();
     const port = addr.port;
+    ensureFirewallRule(port);
     const lanIps = [];
     try {
       const nets = networkInterfaces();

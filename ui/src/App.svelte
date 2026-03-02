@@ -219,7 +219,7 @@
               <div class="welcome-qr-card">
                 <img src={$uiState.qrCodeUrl} alt="LAN QR Code" />
                 <p class="welcome-qr-label">Scan to connect from another device</p>
-                <p class="welcome-qr-url">{window.location.href}</p>
+                <a class="welcome-qr-url" href={window.location.href} target="_blank" rel="noopener noreferrer">{window.location.href}</a>
               </div>
             </div>
           {/if}
@@ -616,11 +616,17 @@
   }
 
   .welcome-qr-url {
+    display: block;
     margin: 0;
     font-size: 0.75rem;
     color: var(--accent-green);
     word-break: break-all;
     font-family: "Consolas", "Monaco", monospace;
+    text-decoration: none;
+  }
+
+  .welcome-qr-url:hover {
+    text-decoration: underline;
   }
 
   .message-wrapper {
