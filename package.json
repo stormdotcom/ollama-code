@@ -12,14 +12,15 @@
   },
   "scripts": {
     "start": "node bin/ollama-code.js",
-    "build": "node -e \"console.log('Build complete')\"",
+    "build": "cd ui && npm run build",
     "version:show": "node bin/ollama-code.js --version"
   },
   "keywords": ["ollama", "cli", "code", "local", "ai"],
   "license": "MIT",
-  "dependencies": {},
-  "optionalDependencies": {
-    "mongodb": "^6.0.0",
+  "dependencies": {
     "qrcode-terminal": "^0.12.0"
+  },
+  "optionalDependencies": {
+    "mongodb": "^6.0.0"
   }
 }

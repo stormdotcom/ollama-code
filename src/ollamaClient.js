@@ -1,8 +1,9 @@
-import { OLLAMA_API_BASE, NUM_CTX } from './constants.js';
+import { OLLAMA_BASE_URL, NUM_CTX } from './constants.js';
 
 /**
- * Stream chat completion from Ollama (OpenAI-compatible /v1/chat/completions).
- * Sends num_ctx for context window. No API key needed.
+ * Stream chat from Ollama native /api/chat endpoint.
+ * Uses Ollama-specific params (num_ctx, keep_alive, temperature).
+ * Native endpoint streams JSON objects (one per line), not SSE.
  * @param {string} model
  * @param {Array<{ role: string, content: string }>} messages
  * @param {function(string): void} onToken
@@ -10,15 +11,18 @@ import { OLLAMA_API_BASE, NUM_CTX } from './constants.js';
  * @returns {Promise<string>} Full content
  */
 export async function streamChat(model, messages, onToken, options = {}) {
-  const res = await fetch(`${OLLAMA_API_BASE}/chat/completions`, {
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
       messages,
       stream: true,
-      max_tokens: 8192,
-      num_ctx: NUM_CTX,
+      options: {
+        num_ctx: NUM_CTX,
+        temperature: 0.2,
+      },
+      keep_alive: '10m',
     }),
     signal: options.signal,
   });
@@ -40,29 +44,27 @@ export async function streamChat(model, messages, onToken, options = {}) {
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
     for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const data = line.slice(6);
-        if (data === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(data);
-          const delta = parsed.choices?.[0]?.delta?.content;
-          if (delta) {
-            fullContent += delta;
-            onToken(delta);
-          }
-        } catch (_) {
-          // skip malformed chunk
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const content = parsed.message?.content;
+        if (content) {
+          fullContent += content;
+          onToken(content);
         }
+      } catch (_) {
+        // skip malformed chunk
       }
     }
   }
-  if (buffer.startsWith('data: ')) {
+  // Process remaining buffer
+  if (buffer.trim()) {
     try {
-      const parsed = JSON.parse(buffer.slice(6));
-      const delta = parsed.choices?.[0]?.delta?.content;
-      if (delta) {
-        fullContent += delta;
-        onToken(delta);
+      const parsed = JSON.parse(buffer);
+      const content = parsed.message?.content;
+      if (content) {
+        fullContent += content;
+        onToken(content);
       }
     } catch (_) {}
   }
@@ -73,15 +75,18 @@ export async function streamChat(model, messages, onToken, options = {}) {
  * Non-streaming completion (e.g. for tool follow-up).
  */
 export async function chat(model, messages) {
-  const res = await fetch(`${OLLAMA_API_BASE}/chat/completions`, {
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model,
       messages,
       stream: false,
-      max_tokens: 8192,
-      num_ctx: NUM_CTX,
+      options: {
+        num_ctx: NUM_CTX,
+        temperature: 0.2,
+      },
+      keep_alive: '10m',
     }),
   });
   if (!res.ok) {
@@ -89,5 +94,5 @@ export async function chat(model, messages) {
     throw new Error(`Ollama API error ${res.status}: ${err}`);
   }
   const data = await res.json();
-  return data.choices?.[0]?.message?.content ?? '';
+  return data.message?.content ?? '';
 }

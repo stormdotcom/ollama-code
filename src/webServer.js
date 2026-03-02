@@ -7,7 +7,7 @@
 import { createServer } from 'http';
 import { networkInterfaces } from 'os';
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { cwd } from 'process';
 import { randomBytes } from 'crypto';
@@ -27,6 +27,22 @@ import { autoPrune, estimateMessagesTokens } from './contextManager.js';
 import { c } from './splash.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = join(__dirname, '..', 'public');
+
+const MIME_TYPES = {
+  '.html': 'text/html',
+  '.js':   'application/javascript',
+  '.css':  'text/css',
+  '.json': 'application/json',
+  '.svg':  'image/svg+xml',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.ico':  'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2':'font/woff2',
+  '.ttf':  'font/ttf',
+  '.map':  'application/json',
+};
 
 // CLI → Web real-time: SSE clients per session (sessionId -> Set<res>)
 const sseClients = new Map();
@@ -369,6 +385,19 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, ragE
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ models, current: currentModel }));
       return;
+    }
+
+    // Static file serving from public/
+    const filePath = join(PUBLIC_DIR, path);
+    if (existsSync(filePath) && !filePath.includes('..')) {
+      const ext = extname(filePath);
+      const mime = MIME_TYPES[ext] || 'application/octet-stream';
+      try {
+        const content = readFileSync(filePath);
+        res.writeHead(200, { 'Content-Type': mime });
+        res.end(content);
+        return;
+      } catch { /* fall through to 404 */ }
     }
 
     res.writeHead(404, { 'Content-Type': 'application/json' });
