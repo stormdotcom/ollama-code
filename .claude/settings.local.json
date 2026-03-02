@@ -8,7 +8,10 @@
       "Bash(wc:*)",
       "Bash(find:*)",
       "Bash(dir:*)",
-      "Bash(del /f \"D:\\\\code\\\\future-tools\\\\ollama-code\\\\src\\\\ragIndex.js\")"
+      "Bash(del /f \"D:\\\\code\\\\future-tools\\\\ollama-code\\\\src\\\\ragIndex.js\")",
+      "Bash(netsh advfirewall firewall show rule:*)",
+      "Bash(findstr:*)",
+      "Bash(netsh advfirewall show currentprofile:*)"
     ]
   }
 }
