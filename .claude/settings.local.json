@@ -15,7 +15,8 @@
       "Bash(ipconfig:*)",
       "Bash(powershell -Command \"Start-Process netsh -ArgumentList ''advfirewall firewall add rule name=\"\"OllamaCode-Port-3141\"\" dir=in action=allow protocol=TCP localport=3141'' -Verb RunAs -Wait\")",
       "Bash(npm run build:*)",
-      "Bash(cd:*)"
+      "Bash(cd:*)",
+      "Bash(ollama pull:*)"
     ]
   }
 }

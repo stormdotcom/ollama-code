@@ -4,7 +4,7 @@ import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js
 import { printSplash, printVersion, printHelp, printTools, printShortcuts, style, c, cliTheme, getLanAddress } from './splash.js';
 import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
 import { streamChat, chat } from './ollamaClient.js';
-import { buildSystemPrompt, DEFAULT_MODEL, FIRST_RESPONSE_TIMEOUT_MS } from './constants.js';
+import { buildSystemPrompt, DEFAULT_MODEL, FIRST_RESPONSE_TIMEOUT_MS, NUM_CTX } from './constants.js';
 import { parseToolCalls } from './tools/xmlParser.js';
 import { executeToolCall, PARALLEL_SAFE_TOOLS } from './tools/executors.js';
 import { scanForSecrets, printScanResults, isUncensoredModel, setUnleashedMode, isUnleashedMode } from './security.js';
@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join, resolve } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MAX_TOOL_ITERATIONS = 10;
+const MAX_TOOL_ITERATIONS = 3;
 
 function getVersion() {
   try {
@@ -986,7 +986,7 @@ export async function runCli(argv) {
             const currentCtx = estimateMessagesTokens(messages);
             console.log('');
             console.log(`  ${c.magenta}${c.bold}Token Usage${c.reset}`);
-            console.log(`  ${c.cyan}Context now:${c.reset}     ~${currentCtx} tokens (of ${c.bold}32768${c.reset} max)`);
+            console.log(`  ${c.cyan}Context now:${c.reset}     ~${currentCtx} tokens (of ${c.bold}${NUM_CTX}${c.reset} max)`);
             console.log(`  ${c.cyan}Messages:${c.reset}        ${messages.length}`);
             console.log(`  ${c.cyan}Total prompt:${c.reset}    ~${stats.promptTokens} tokens`);
             console.log(`  ${c.cyan}Total response:${c.reset}  ~${stats.completionTokens} tokens`);
@@ -994,7 +994,7 @@ export async function runCli(argv) {
             console.log(`  ${c.cyan}Turns:${c.reset}           ${stats.turns}`);
             console.log(`  ${c.cyan}Tool calls:${c.reset}      ${stats.toolCalls}`);
             console.log(`  ${c.cyan}Compactions:${c.reset}     ${stats.compactions}`);
-            const pct = Math.round((currentCtx / 32768) * 100);
+            const pct = Math.round((currentCtx / NUM_CTX) * 100);
             const bar = '█'.repeat(Math.round(pct / 5)) + '░'.repeat(20 - Math.round(pct / 5));
             console.log(`  ${c.cyan}Context usage:${c.reset}   [${pct > 80 ? c.red : pct > 60 ? c.yellow : c.green}${bar}${c.reset}] ${pct}%`);
             console.log('');

@@ -60,7 +60,7 @@ export function createTokenTracker() {
  * @param {object} options
  * @returns {{ messages: Array, pruned: boolean, prunedCount: number }}
  */
-export function autoPrune(messages, { maxTokens = NUM_CTX, reserveTokens = 4096, keepRecent = 10 } = {}) {
+export function autoPrune(messages, { maxTokens = NUM_CTX, reserveTokens = 512, keepRecent = 3 } = {}) {
   const budget = maxTokens - reserveTokens; // leave room for next response
   const currentTokens = estimateMessagesTokens(messages);
 
@@ -113,7 +113,7 @@ export function autoPrune(messages, { maxTokens = NUM_CTX, reserveTokens = 4096,
  * @param {object} options
  * @returns {Promise<{ messages: Array, summarized: boolean, originalCount: number }>}
  */
-export async function compactConversation(model, messages, { keepRecent = 6 } = {}) {
+export async function compactConversation(model, messages, { keepRecent = 3 } = {}) {
   if (messages.length <= keepRecent + 2) {
     return { messages, summarized: false, originalCount: messages.length };
   }

@@ -1,10 +1,10 @@
-import { readdirSync, statSync } from 'fs';
+import { readdirSync } from 'fs';
 import { join, relative } from 'path';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', '.next', 'dist', 'build', '.ollama-code', '.vscode', '.idea', 'coverage', 'vendor']);
 const CODE_EXTS = /\.(js|ts|jsx|tsx|mjs|cjs|py|rb|go|rs|java|c|cpp|h|hpp|cs|json|yaml|yml|md|txt|html|css|scss|sh|ps1|bat|cmd|env|cfg|ini|toml|sql|xml|graphql|proto|vue|svelte|astro|php|lua|ex|exs|erl|hrl|hs|ml|fs|fsx|r|jl|dart|kt|scala|swift|m|mm)$/i;
-const MAX_FILES = 200;
-const MAX_DEPTH = 6;
+const MAX_FILES = 20;
+const MAX_DEPTH = 2;
 
 /**
  * Scan cwd and return a compact file tree string for the system prompt.
@@ -36,12 +36,7 @@ export function scanProjectTree(cwd) {
       if (count >= MAX_FILES) { lines.push(`${prefix}... (truncated)`); return; }
       const fullPath = join(dir, f.name);
       const rel = relative(cwd, fullPath);
-      try {
-        const stat = statSync(fullPath);
-        lines.push(`${prefix}${rel} (${(stat.size / 1024).toFixed(1)} KB)`);
-      } catch {
-        lines.push(`${prefix}${rel}`);
-      }
+      lines.push(`${prefix}${rel}`);
       count++;
     }
 
