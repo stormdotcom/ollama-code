@@ -5,43 +5,97 @@
  * Access from any device on your LAN: http://<host-ip>:3141?token=<auth-token>
  */
 import { createServer } from 'http';
-import { networkInterfaces, platform } from 'os';
+import { networkInterfaces } from 'os';
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname, extname } from 'path';
 import { fileURLToPath } from 'url';
 import { cwd } from 'process';
 import { randomBytes } from 'crypto';
-import { execSync } from 'child_process';
 import { SERVE_HOST, SERVE_PORT } from './constants.js';
-import { checkOllamaRunning, isModelAvailable, listModels } from './preflight.js';
-import { buildSystemPrompt, DEFAULT_MODEL } from './constants.js';
-import { streamChat } from './ollamaClient.js';
-import { parseToolCalls } from './tools/xmlParser.js';
-import { executeToolCall } from './tools/executors.js';
-import { loadSession, listSessions, saveSession, autoSave, tryConnect as trySessionConnect, isConnected as isSessionConnected, generateSessionId, deleteSession } from './sessionStore.js';
-import { loadSettings } from './settings.js';
-import { scanProjectTree } from './projectScanner.js';
-import { getGitContext, formatGitContextForPrompt } from './gitContext.js';
-import { isUncensoredModel, setUnleashedMode, isUnleashedMode, setServeMode } from './security.js';
-import { autoPrune, estimateMessagesTokens } from './contextManager.js';
+import { ensurePortOpen } from './networkSetup.js';
+import {
+  checkOllamaRunning,
+  isModelAvailable,
+  listModels,
+} from "./preflight.js";
+import { buildSystemPrompt, DEFAULT_MODEL } from "./constants.js";
+import { streamChat } from "./ollamaClient.js";
+import { parseToolCalls } from "./tools/xmlParser.js";
+import { executeToolCall } from "./tools/executors.js";
+import {
+  loadSession,
+  listSessions,
+  saveSession,
+  autoSave,
+  tryConnect as trySessionConnect,
+  isConnected as isSessionConnected,
+  generateSessionId,
+  deleteSession,
+} from "./sessionStore.js";
+import { loadSettings } from "./settings.js";
+import { scanProjectTree } from "./projectScanner.js";
+import { getGitContext, formatGitContextForPrompt } from "./gitContext.js";
+import {
+  isUncensoredModel,
+  setUnleashedMode,
+  isUnleashedMode,
+  setServeMode,
+} from "./security.js";
+import { autoPrune, estimateMessagesTokens } from "./contextManager.js";
 import { c } from './splash.js';
 
+/**
+ * Pick the best LAN IP for sharing — prefers 192.168.x/10.x WiFi-style ranges
+ * and skips virtual adapter names (VPN, Docker, VM, etc.).
+ * Falls back to first non-loopback IP when nothing preferred is found.
+ */
+function getBestLanIp() {
+  const VIRTUAL_PATTERNS = /vethernet|docker|vmnet|vmware|virtualbox|utun|tun|tap|vpn|wsl|loopback|pseudo|teredo|isatap/i;
+  const PREFERRED_RANGES = [
+    (ip) => ip.startsWith('192.168.'),
+    (ip) => ip.startsWith('10.'),
+    (ip) => /^172\.(1[6-9]|2[0-9]|3[01])\./.test(ip), // 172.16-31.x
+  ];
+  let fallback = null;
+  try {
+    const nets = networkInterfaces();
+    // First pass: preferred ranges on real (non-virtual) adapters
+    for (const [name, addrs] of Object.entries(nets)) {
+      if (VIRTUAL_PATTERNS.test(name)) continue;
+      for (const net of addrs || []) {
+        if (net.family !== 'IPv4' || net.internal) continue;
+        if (PREFERRED_RANGES.some((fn) => fn(net.address))) return net.address;
+        if (!fallback) fallback = net.address;
+      }
+    }
+    // Second pass: any non-loopback including virtual (last resort)
+    if (!fallback) {
+      for (const addrs of Object.values(nets)) {
+        for (const net of addrs || []) {
+          if (net.family === 'IPv4' && !net.internal) return net.address;
+        }
+      }
+    }
+  } catch { /* ignore */ }
+  return fallback || '127.0.0.1';
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = join(__dirname, '..', 'public');
+const PUBLIC_DIR = join(__dirname, "..", "public");
 
 const MIME_TYPES = {
-  '.html': 'text/html',
-  '.js':   'application/javascript',
-  '.css':  'text/css',
-  '.json': 'application/json',
-  '.svg':  'image/svg+xml',
-  '.png':  'image/png',
-  '.jpg':  'image/jpeg',
-  '.ico':  'image/x-icon',
-  '.woff': 'font/woff',
-  '.woff2':'font/woff2',
-  '.ttf':  'font/ttf',
-  '.map':  'application/json',
+  ".html": "text/html",
+  ".js": "application/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".map": "application/json",
 };
 
 // CLI → Web real-time: SSE clients per session (sessionId -> Set<res>)
@@ -54,27 +108,29 @@ const sseClients = new Map();
 export function notifySessionUpdated(sessionId) {
   const clients = sseClients.get(sessionId);
   if (!clients || clients.size === 0) return;
-  loadSession(sessionId).then((session) => {
-    if (!session) return;
-    const payload = JSON.stringify(session);
-    for (const res of clients) {
-      try {
-        res.write(`event: update\ndata: ${payload}\n\n`);
-      } catch {
-        clients.delete(res);
-        if (clients.size === 0) sseClients.delete(sessionId);
+  loadSession(sessionId)
+    .then((session) => {
+      if (!session) return;
+      const payload = JSON.stringify(session);
+      for (const res of clients) {
+        try {
+          res.write(`event: update\ndata: ${payload}\n\n`);
+        } catch {
+          clients.delete(res);
+          if (clients.size === 0) sseClients.delete(sessionId);
+        }
       }
-    }
-  }).catch(() => {});
+    })
+    .catch(() => {});
 }
 
 /** Print a QR code for the given URL to the terminal (scan to open session). Optional dep qrcode-terminal. */
 export async function printSessionQr(url) {
-  if (!url || typeof url !== 'string') return;
+  if (!url || typeof url !== "string") return;
   try {
-    const qt = await import('qrcode-terminal');
+    const qt = await import("qrcode-terminal");
     const gen = qt.default?.generate ?? qt.generate;
-    if (typeof gen === 'function') {
+    if (typeof gen === "function") {
       gen(url, { small: true });
     }
   } catch {
@@ -84,142 +140,153 @@ export async function printSessionQr(url) {
 const MAX_TOOL_ITERATIONS = 10;
 
 function emit(res, type, data) {
-  res.write(JSON.stringify({ type, ...data }) + '\n');
+  res.write(JSON.stringify({ type, ...data }) + "\n");
 }
 
 // ── Shared HTTP server factory ──────────────────────────────────────────────
 
-function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken, onWebActivity }) {
-  const htmlPath = join(__dirname, '..', 'public', 'index.html');
+function createHttpServer({
+  workDir,
+  systemPrompt,
+  currentModel,
+  fileCount,
+  authToken,
+  onWebActivity,
+}) {
+  const htmlPath = join(__dirname, "..", "public", "index.html");
   let html = existsSync(htmlPath)
-    ? readFileSync(htmlPath, 'utf8')
-    : '<!DOCTYPE html><html><body><h1>Ollama Code</h1><p>public/index.html not found</p></body></html>';
+    ? readFileSync(htmlPath, "utf8")
+    : "<!DOCTYPE html><html><body><h1>Ollama Code</h1><p>public/index.html not found</p></body></html>";
 
   if (authToken) {
     html = html.replace(
       "const API = '';",
-      `const API = '';\n    const AUTH_TOKEN = '${authToken}';`
+      `const API = '';\n    const AUTH_TOKEN = '${authToken}';`,
     );
-    html = html.replace(
-      /fetch\(API \+/g,
-      "fetch(API +"
-    );
+    html = html.replace(/fetch\(API \+/g, "fetch(API +");
   }
 
   function checkAuth(req, url) {
     if (!authToken) return true;
-    const queryToken = url.searchParams.get('token');
-    const headerToken = req.headers['x-auth-token'];
+    const queryToken = url.searchParams.get("token");
+    const headerToken = req.headers["x-auth-token"];
     return queryToken === authToken || headerToken === authToken;
   }
 
   const server = createServer(async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Auth-Token');
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token");
 
-    if (req.method === 'OPTIONS') {
+    if (req.method === "OPTIONS") {
       res.writeHead(204);
       res.end();
       return;
     }
 
-    const url = new URL(req.url || '/', `http://${req.headers.host}`);
+    const url = new URL(req.url || "/", `http://${req.headers.host}`);
     const path = url.pathname;
 
-    if (path === '/' || path === '/index.html') {
+    if (path === "/" || path === "/index.html") {
       if (authToken && !checkAuth(req, url)) {
-        res.writeHead(401, { 'Content-Type': 'text/html' });
+        res.writeHead(401, { "Content-Type": "text/html" });
         res.end(
           '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access denied</title></head><body style="font-family:system-ui,sans-serif;max-width:32rem;margin:2rem auto;padding:1rem;">' +
-          '<h2>Access denied</h2>' +
-          '<p>This session requires a token. Get it from the terminal where <code>ollama-code</code> is running:</p>' +
-          '<ul style="margin:1rem 0;">' +
-          '<li><strong>QR code</strong> — Look at the terminal for a QR code; scan it with your phone to open this session.</li>' +
-          '<li><strong>Token</strong> — Or copy the token from the terminal and append <code>?token=YOUR_TOKEN</code> to this URL.</li>' +
-          '</ul>' +
-          '<p style="color:#666;">Example: <code>' + (req.headers.host || '') + '?token=abc123...</code></p>' +
-          '</body></html>'
+            "<h2>Access denied</h2>" +
+            "<p>This session requires a token. Get it from the terminal where <code>ollama-code</code> is running:</p>" +
+            '<ul style="margin:1rem 0;">' +
+            "<li><strong>QR code</strong> — Look at the terminal for a QR code; scan it with your phone to open this session.</li>" +
+            "<li><strong>Token</strong> — Or copy the token from the terminal and append <code>?token=YOUR_TOKEN</code> to this URL.</li>" +
+            "</ul>" +
+            '<p style="color:#666;">Example: <code>' +
+            (req.headers.host || "") +
+            "?token=abc123...</code></p>" +
+            "</body></html>",
         );
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.writeHead(200, { "Content-Type": "text/html" });
       res.end(html);
       return;
     }
 
-    if (path.startsWith('/api/') && !checkAuth(req, url)) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Unauthorized. Include token as X-Auth-Token header or ?token= query param.' }));
+    if (path.startsWith("/api/") && !checkAuth(req, url)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          error:
+            "Unauthorized. Include token as X-Auth-Token header or ?token= query param.",
+        }),
+      );
       return;
     }
 
-    if (path === '/api/sessions' && req.method === 'GET') {
+    if (path === "/api/sessions" && req.method === "GET") {
       if (!isSessionConnected()) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ sessions: [] }));
         return;
       }
       const sessions = await listSessions(20);
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ sessions }));
       return;
     }
 
     const sessionMatch = path.match(/^\/api\/sessions\/([^/]+)\/?$/);
-    if (sessionMatch && req.method === 'GET') {
+    if (sessionMatch && req.method === "GET") {
       const sessionId = sessionMatch[1];
       if (!isSessionConnected()) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Sessions not available' }));
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Sessions not available" }));
         return;
       }
       const session = await loadSession(sessionId);
       if (!session) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Session not found' }));
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Session not found" }));
         return;
       }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(session));
       return;
     }
 
-    if (sessionMatch && req.method === 'DELETE') {
+    if (sessionMatch && req.method === "DELETE") {
       const sessionId = sessionMatch[1];
       if (!isSessionConnected()) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Sessions not available' }));
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Sessions not available" }));
         return;
       }
       if (!checkAuth(req, url)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
         return;
       }
       const success = await deleteSession(sessionId);
       if (success) {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ success: true }));
       } else {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to delete or not found' }));
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Failed to delete or not found" }));
       }
       return;
     }
 
     // SSE: CLI → Web real-time (subscribe to session updates)
     const eventsMatch = path.match(/^\/api\/sessions\/([^/]+)\/events\/?$/);
-    if (eventsMatch && req.method === 'GET') {
+    if (eventsMatch && req.method === "GET") {
       const sessionId = eventsMatch[1];
       if (!checkAuth(req, url)) {
-        res.writeHead(401, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unauthorized' }));
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Unauthorized" }));
         return;
       }
       if (!isSessionConnected()) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Sessions not available' }));
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Sessions not available" }));
         return;
       }
       let clients = sseClients.get(sessionId);
@@ -228,80 +295,91 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
         sseClients.set(sessionId, clients);
       }
       clients.add(res);
-      res.on('close', () => {
+      res.on("close", () => {
         clients.delete(res);
         if (clients.size === 0) sseClients.delete(sessionId);
       });
       res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "X-Accel-Buffering": "no",
       });
-      res.write(': connected\n\n');
+      res.write(": connected\n\n");
       // Send current session state immediately
-      loadSession(sessionId).then((session) => {
-        if (session && clients.has(res)) res.write(`event: update\ndata: ${JSON.stringify(session)}\n\n`);
-      }).catch(() => {});
+      loadSession(sessionId)
+        .then((session) => {
+          if (session && clients.has(res))
+            res.write(`event: update\ndata: ${JSON.stringify(session)}\n\n`);
+        })
+        .catch(() => {});
       return;
     }
 
     const messageMatch = path.match(/^\/api\/sessions\/([^/]+)\/message$/);
-    if (messageMatch && req.method === 'POST') {
+    if (messageMatch && req.method === "POST") {
       const sessionId = messageMatch[1];
-      let body = '';
+      let body = "";
       for await (const chunk of req) body += chunk;
       let parsed;
       try {
-        parsed = JSON.parse(body || '{}');
+        parsed = JSON.parse(body || "{}");
       } catch {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Invalid JSON' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid JSON" }));
         return;
       }
-      const userInput = (parsed.message || '').trim();
+      const userInput = (parsed.message || "").trim();
       if (!userInput) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Message required' }));
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Message required" }));
         return;
       }
 
-      if (typeof onWebActivity === 'function') {
-        onWebActivity('user', { sessionId, message: userInput, model: parsed.model });
+      if (typeof onWebActivity === "function") {
+        onWebActivity("user", {
+          sessionId,
+          message: userInput,
+          model: parsed.model,
+        });
       }
 
       let session = await loadSession(sessionId);
-      let messages = session?.messages?.map((m) => ({ role: m.role, content: m.content })) || [
-        { role: 'system', content: systemPrompt },
-      ];
+      let messages = session?.messages?.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })) || [{ role: "system", content: systemPrompt }];
       let model = parsed.model || session?.model || currentModel;
 
       res.writeHead(200, {
-        'Content-Type': 'application/x-ndjson',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
       });
 
-      let responseBuffer = '';
+      let responseBuffer = "";
       const send = (type, data) => {
         emit(res, type, data);
-        if (typeof onWebActivity === 'function') {
-          if (type === 'progress') onWebActivity('progress', data);
-          if (type === 'tool') onWebActivity('tool', data);
-          if (type === 'token') {
-            responseBuffer += (data.text || '');
-            onWebActivity('token', data);
+        if (typeof onWebActivity === "function") {
+          if (type === "progress") onWebActivity("progress", data);
+          if (type === "tool") onWebActivity("tool", data);
+          if (type === "token") {
+            responseBuffer += data.text || "";
+            onWebActivity("token", data);
           }
-          if (type === 'error') onWebActivity('error', data);
+          if (type === "error") onWebActivity("error", data);
         }
       };
 
-      messages.push({ role: 'user', content: userInput });
+      messages.push({ role: "user", content: userInput });
 
       const pruneResult = autoPrune(messages);
       if (pruneResult.pruned) {
         messages = pruneResult.messages;
-        send('progress', { step: 0, label: `Context pruned (${pruneResult.prunedCount} messages removed)` });
+        send("progress", {
+          step: 0,
+          label: `Context pruned (${pruneResult.prunedCount} messages removed)`,
+        });
       }
 
       let iteration = 0;
@@ -311,24 +389,34 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
       while (iteration < MAX_TOOL_ITERATIONS) {
         iteration++;
         stepNum++;
-        send('progress', { step: stepNum, label: 'Thinking...', elapsed: 0 });
+        send("progress", { step: stepNum, label: "Thinking...", elapsed: 0 });
 
-        let turnContent = '';
+        let turnContent = "";
         const abortController = new AbortController();
 
-        const onToken = (token) => send('token', { text: token });
+        const onToken = (token) => send("token", { text: token });
 
         try {
-          turnContent = await streamChat(model, messages, (token) => send('token', { text: token }), { signal: abortController.signal });
+          turnContent = await streamChat(
+            model,
+            messages,
+            (token) => send("token", { text: token }),
+            { signal: abortController.signal },
+          );
         } catch (err) {
-          send('error', { message: err.message || String(err) });
-          if (typeof onWebActivity === 'function') onWebActivity('error', { message: err.message || String(err) });
+          send("error", { message: err.message || String(err) });
+          if (typeof onWebActivity === "function")
+            onWebActivity("error", { message: err.message || String(err) });
           res.end();
           return;
         }
 
-        send('progress', { step: stepNum, label: 'Thinking', elapsed: (Date.now() - turnStart) / 1000 });
-        messages.push({ role: 'assistant', content: turnContent });
+        send("progress", {
+          step: stepNum,
+          label: "Thinking",
+          elapsed: (Date.now() - turnStart) / 1000,
+        });
+        messages.push({ role: "assistant", content: turnContent });
 
         const toolCalls = parseToolCalls(turnContent);
         if (toolCalls.length === 0) break;
@@ -336,23 +424,35 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
         const results = [];
         for (const call of toolCalls) {
           stepNum++;
-          const detail = (call.innerText.split('\n')[0] || '').trim().slice(0, 80);
-          send('progress', { step: stepNum, label: call.tag, detail });
+          const detail = (call.innerText.split("\n")[0] || "")
+            .trim()
+            .slice(0, 80);
+          send("progress", { step: stepNum, label: call.tag, detail });
           const result = await executeToolCall(workDir, call);
           results.push(result);
-          send('tool', { step: stepNum, tool: call.tag, detail, result: result.split('\n')[0] });
+          send("tool", {
+            step: stepNum,
+            tool: call.tag,
+            detail,
+            result: result.split("\n")[0],
+          });
         }
         messages.push({
-          role: 'user',
-          content: `[Tool results]\n${results.join('\n---\n')}`,
+          role: "user",
+          content: `[Tool results]\n${results.join("\n---\n")}`,
         });
       }
 
       const elapsed = (Date.now() - turnStart) / 1000;
-      const doneData = { steps: stepNum, elapsed, contextTokens: estimateMessagesTokens(messages), fullResponse: responseBuffer };
-      send('done', doneData);
-      if (typeof onWebActivity === 'function') onWebActivity('done', doneData);
-      send('messages', { messages });
+      const doneData = {
+        steps: stepNum,
+        elapsed,
+        contextTokens: estimateMessagesTokens(messages),
+        fullResponse: responseBuffer,
+      };
+      send("done", doneData);
+      if (typeof onWebActivity === "function") onWebActivity("done", doneData);
+      send("messages", { messages });
 
       await autoSave(sessionId, messages, model, {
         cwd: workDir,
@@ -365,14 +465,14 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
       return;
     }
 
-    if (path === '/api/models' && req.method === 'GET') {
+    if (path === "/api/models" && req.method === "GET") {
       const models = await listModels();
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ models, current: currentModel }));
       return;
     }
 
-    if (path === '/api/info' && req.method === 'GET') {
+    if (path === "/api/info" && req.method === "GET") {
       const addr = server.address();
       const port = addr?.port || SERVE_PORT;
       const lanIps = [];
@@ -380,38 +480,47 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
         const nets = networkInterfaces();
         for (const name of Object.keys(nets)) {
           for (const net of nets[name] || []) {
-            if (net.family === 'IPv4' && !net.internal) {
+            if (net.family === "IPv4" && !net.internal) {
               lanIps.push(net.address);
             }
           }
         }
-      } catch { /* ignore */ }
-      const tokenParam = authToken ? `?token=${authToken}` : '';
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({
-        lanIps: [...new Set(lanIps)],
-        port,
-        lanUrl: lanIps.length > 0 ? `http://${lanIps[0]}:${port}${tokenParam}` : null,
-        localUrl: `http://localhost:${port}${tokenParam}`,
-      }));
+      } catch {
+        /* ignore */
+      }
+      const tokenParam = authToken ? `?token=${authToken}` : "";
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          lanIps: [...new Set(lanIps)],
+          port,
+          lanUrl:
+            lanIps.length > 0
+              ? `http://${lanIps[0]}:${port}${tokenParam}`
+              : null,
+          localUrl: `http://localhost:${port}${tokenParam}`,
+        }),
+      );
       return;
     }
 
     // Static file serving from public/
     const filePath = join(PUBLIC_DIR, path);
-    if (existsSync(filePath) && !filePath.includes('..')) {
+    if (existsSync(filePath) && !filePath.includes("..")) {
       const ext = extname(filePath);
-      const mime = MIME_TYPES[ext] || 'application/octet-stream';
+      const mime = MIME_TYPES[ext] || "application/octet-stream";
       try {
         const content = readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': mime });
+        res.writeHead(200, { "Content-Type": mime });
         res.end(content);
         return;
-      } catch { /* fall through to 404 */ }
+      } catch {
+        /* fall through to 404 */
+      }
     }
 
-    res.writeHead(404, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Not found' }));
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
   });
 
   return server;
@@ -420,29 +529,50 @@ function createHttpServer({ workDir, systemPrompt, currentModel, fileCount, auth
 // ── Windows Firewall helper ──────────────────────────────────────────────────
 
 function ensureFirewallRule(port) {
-  if (platform() !== 'win32') return;
+  if (platform() !== "win32") return;
   const ruleName = `OllamaCode-Port-${port}`;
   try {
-    // Check if rule already exists
-    execSync(`netsh advfirewall firewall show rule name="${ruleName}"`, { stdio: 'ignore' });
+    // Check if rule already exists — exit early if it does
+    execSync(`netsh advfirewall firewall show rule name="${ruleName}"`, {
+      stdio: "ignore",
+    });
+    return; // rule already present
   } catch {
-    // Rule doesn't exist — try to add it directly first
+    /* rule not found — attempt to add */
+  }
+
+  let added = false;
+
+  // Try direct add (works when running as admin)
+  try {
+    execSync(
+      `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${port}`,
+      { stdio: "ignore" },
+    );
+    added = true;
+  } catch {
+    /* not admin */
+  }
+
+  // Try via elevated PowerShell (shows UAC prompt) — only if direct add failed
+  if (!added) {
     try {
       execSync(
-        `netsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${port}`,
-        { stdio: 'ignore' }
+        `powershell -Command "Start-Process netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=TCP localport=${port}' -Verb RunAs -Wait"`,
+        { stdio: "ignore", timeout: 15000 },
       );
+      added = true;
     } catch {
-      // Not admin — try via elevated PowerShell (shows UAC prompt)
-      try {
-        execSync(
-          `powershell -Command "Start-Process netsh -ArgumentList 'advfirewall firewall add rule name=\\"${ruleName}\\" dir=in action=allow protocol=TCP localport=${port}' -Verb RunAs -Wait"`,
-          { stdio: 'ignore', timeout: 30000 }
-        );
-      } catch {
-        // User declined UAC or timeout — LAN access may not work
-      }
+      /* user declined UAC or timeout */
     }
+  }
+
+  if (!added) {
+    console.warn(
+      `\n  \x1b[33m⚠  Windows Firewall:\x1b[0m Could not auto-add inbound rule for port ${port}.` +
+        `\n     Mobile/LAN devices may be blocked. Run once in an admin PowerShell:\n` +
+        `     \x1b[90mnetsh advfirewall firewall add rule name="${ruleName}" dir=in action=allow protocol=TCP localport=${port}\x1b[0m\n`,
+    );
   }
 }
 
@@ -455,16 +585,30 @@ let embeddedToken = null;
  * Start the web server in the background alongside the CLI.
  * Returns { token, port, url } or null if it fails.
  */
-export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileCount, noAuth = false, onWebActivity = null }) {
+export function startEmbeddedServer({
+  workDir,
+  systemPrompt,
+  currentModel,
+  fileCount,
+  noAuth = false,
+  onWebActivity = null,
+}) {
   if (embeddedServer) return getEmbeddedInfo(); // already running
 
-  const authToken = noAuth ? null : randomBytes(16).toString('hex');
+  const authToken = noAuth ? null : randomBytes(16).toString("hex");
   embeddedToken = authToken;
 
-  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken, onWebActivity });
+  const server = createHttpServer({
+    workDir,
+    systemPrompt,
+    currentModel,
+    fileCount,
+    authToken,
+    onWebActivity,
+  });
 
   return new Promise((resolve) => {
-    server.on('error', (err) => {
+    server.on("error", (err) => {
       // Port in use or other error — silently fail, CLI continues fine
       embeddedServer = null;
       resolve(null);
@@ -472,7 +616,7 @@ export function startEmbeddedServer({ workDir, systemPrompt, currentModel, fileC
 
     server.listen(SERVE_PORT, SERVE_HOST, () => {
       embeddedServer = server;
-      ensureFirewallRule(SERVE_PORT);
+      ensurePortOpen(SERVE_PORT);
       // Prevent the server from keeping Node alive when CLI exits
       server.unref();
       resolve(getEmbeddedInfo());
@@ -506,20 +650,8 @@ export function getEmbeddedInfo() {
   const addr = embeddedServer.address();
   if (!addr) return null;
   const port = addr.port;
-  let lanIp = '127.0.0.1';
-  try {
-    const nets = networkInterfaces();
-    for (const name of Object.keys(nets)) {
-      for (const net of nets[name] || []) {
-        if (net.family === 'IPv4' && !net.internal) {
-          lanIp = net.address;
-          break;
-        }
-      }
-      if (lanIp !== '127.0.0.1') break;
-    }
-  } catch { /* ignore */ }
-  const tokenParam = embeddedToken ? `?token=${embeddedToken}` : '';
+  const lanIp = getBestLanIp();
+  const tokenParam = embeddedToken ? `?token=${embeddedToken}` : "";
   return {
     token: embeddedToken,
     port,
@@ -532,12 +664,18 @@ export function getEmbeddedInfo() {
 // ── Standalone serve mode (--serve flag) ────────────────────────────────────
 
 function parseStandaloneArgs(argv) {
-  const args = { model: DEFAULT_MODEL, port: SERVE_PORT, host: SERVE_HOST, noAuth: false };
+  const args = {
+    model: DEFAULT_MODEL,
+    port: SERVE_PORT,
+    host: SERVE_HOST,
+    noAuth: false,
+  };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--port' && argv[i + 1]) args.port = parseInt(argv[++i], 10);
-    if (argv[i] === '--host' && argv[i + 1]) args.host = argv[++i];
-    if (argv[i] === '--model' && argv[i + 1]) args.model = argv[++i];
-    if (argv[i] === '--no-auth') args.noAuth = true;
+    if (argv[i] === "--port" && argv[i + 1])
+      args.port = parseInt(argv[++i], 10);
+    if (argv[i] === "--host" && argv[i + 1]) args.host = argv[++i];
+    if (argv[i] === "--model" && argv[i + 1]) args.model = argv[++i];
+    if (argv[i] === "--no-auth") args.noAuth = true;
   }
   return args;
 }
@@ -546,17 +684,20 @@ export async function runServe(argv) {
   const args = parseStandaloneArgs(argv);
   setServeMode(true);
 
-  const authToken = args.noAuth ? null : randomBytes(16).toString('hex');
+  const authToken = args.noAuth ? null : randomBytes(16).toString("hex");
 
   const workDir = cwd();
   const preflight = await checkOllamaRunning();
   if (!preflight.ok) {
-    console.error('Ollama is not running. Start it first.');
+    console.error("Ollama is not running. Start it first.");
     process.exit(1);
   }
 
   let currentModel = args.model;
-  if (preflight.models?.length && !isModelAvailable(currentModel, preflight.models)) {
+  if (
+    preflight.models?.length &&
+    !isModelAvailable(currentModel, preflight.models)
+  ) {
     currentModel = preflight.models[0];
   }
 
@@ -564,55 +705,55 @@ export async function runServe(argv) {
 
   const settings = loadSettings(workDir);
   const fileTree = scanProjectTree(workDir);
-  const fileCount = fileTree.split('\n').filter((l) => l.trim()).length;
+  const fileCount = fileTree.split("\n").filter((l) => l.trim()).length;
   const gitContext = await getGitContext();
   const gitInfo = formatGitContextForPrompt(gitContext);
-  const systemPrompt = buildSystemPrompt({ cwd: workDir, fileTree, gitInfo, unleashed: isUnleashedMode() });
+  const systemPrompt = buildSystemPrompt({
+    cwd: workDir,
+    fileTree,
+    gitInfo,
+    unleashed: isUnleashedMode(),
+  });
 
   await trySessionConnect(workDir);
 
-  const server = createHttpServer({ workDir, systemPrompt, currentModel, fileCount, authToken });
+  const server = createHttpServer({
+    workDir,
+    systemPrompt,
+    currentModel,
+    fileCount,
+    authToken,
+  });
 
   server.listen(args.port, args.host, () => {
     const addr = server.address();
     const port = addr.port;
-    ensureFirewallRule(port);
-    const lanIps = [];
-    try {
-      const nets = networkInterfaces();
-      for (const name of Object.keys(nets)) {
-        for (const net of nets[name] || []) {
-          if (net.family === 'IPv4' && !net.internal) {
-            lanIps.push(net.address);
-          }
-        }
-      }
-    } catch { /* ignore */ }
-    const uniqueIps = [...new Set(lanIps)];
-    const tokenParam = authToken ? `?token=${authToken}` : '';
+    ensurePortOpen(port);
+    const lanIp = getBestLanIp();
+    const tokenParam = authToken ? `?token=${authToken}` : "";
+    const lanUrl = `http://${lanIp}:${port}${tokenParam}`;
 
-    console.log('');
+    console.log("");
     console.log(`  Ollama Code — LAN Web UI`);
     console.log(`  ─────────────────────────`);
     console.log(`  Local:   http://localhost:${port}${tokenParam}`);
-    if (uniqueIps.length > 0) {
-      uniqueIps.forEach((ip) => console.log(`  LAN:     http://${ip}:${port}${tokenParam}`));
-    } else {
-      console.log(`  LAN:     http://<your-ip>:${port}${tokenParam}`);
-    }
+    console.log(`  LAN:     ${lanUrl}`);
     console.log(`  Model:   ${currentModel}`);
     console.log(`  CWD:     ${workDir}`);
     if (authToken) {
-      console.log(`  Auth:    Token-based (use URL above or pass X-Auth-Token header)`);
+      console.log(
+        `  Auth:    Token-based (use URL above or pass X-Auth-Token header)`,
+      );
       console.log(`  Token:   ${authToken}`);
-      const qrUrl = uniqueIps.length > 0 ? `http://${uniqueIps[0]}:${port}${tokenParam}` : `http://localhost:${port}${tokenParam}`;
-      console.log(`  ${c.dim}Scan QR code below to open session on your phone:${c.reset}`);
-      printSessionQr(qrUrl).catch(() => {});
+      console.log(
+        `  ${c.dim}Scan QR code below to open session on your phone:${c.reset}`,
+      );
+      printSessionQr(lanUrl).catch(() => {});
     } else {
       console.log(`  Auth:    DISABLED (--no-auth). Anyone on LAN can access.`);
     }
-    console.log('');
+    console.log("");
     console.log(`  Open from phone/tablet on same Wi-Fi using LAN URL above`);
-    console.log('');
+    console.log("");
   });
 }

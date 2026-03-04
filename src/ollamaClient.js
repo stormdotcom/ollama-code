@@ -1,4 +1,4 @@
-import { OLLAMA_BASE_URL, NUM_CTX } from './constants.js';
+import { OLLAMA_BASE_URL, NUM_CTX, TEMPERATURE, TOP_P, TOP_K, NUM_PREDICT } from './constants.js';
 
 /**
  * Stream chat from Ollama native /api/chat endpoint.
@@ -19,12 +19,12 @@ export async function streamChat(model, messages, onToken, options = {}) {
       messages,
       stream: true,
       options: {
-        num_ctx: NUM_CTX,
-        temperature: 0.4,
-        num_predict: 512,
-        num_batch: 128,
+        num_ctx:        NUM_CTX,
+        temperature:    TEMPERATURE,
+        top_p:          TOP_P,
+        top_k:          TOP_K,
+        num_predict:    NUM_PREDICT,
         repeat_penalty: 1.1,
-        low_vram: true,
       },
       keep_alive: '10m',
     }),
@@ -87,12 +87,12 @@ export async function chat(model, messages) {
       messages,
       stream: false,
       options: {
-        num_ctx: NUM_CTX,
-        temperature: 0.4,
-        num_predict: 512,
-        num_batch: 128,
+        num_ctx:        NUM_CTX,
+        temperature:    TEMPERATURE,
+        top_p:          TOP_P,
+        top_k:          TOP_K,
+        num_predict:    NUM_PREDICT,
         repeat_penalty: 1.1,
-        low_vram: true,
       },
       keep_alive: '10m',
     }),
